@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<title>JMS Debug Tool</title>
+<style>
+body { font-family: monospace; background: #1e1e2e; color: #cdd6f4; padding: 20px; }
+h2 { color: #cba6f7; }
+button { background: #313244; color: #cdd6f4; border: 1px solid #45475a; padding: 8px 16px; margin: 4px; cursor: pointer; border-radius: 6px; }
+button:hover { background: #45475a; }
+#output { background: #11111b; border: 1px solid #313244; padding: 16px; margin-top: 12px; white-space: pre-wrap; max-height: 500px; overflow-y: auto; font-size: 13px; border-radius: 8px; }
+.ok { color: #a6e3a1; }
+.warn { color: #f9e2af; }
+.err { color: #f38ba8; }
+.info { color: #89b4fa; }
+</style>
+</head>
+<body>
+<h2>🔧 JMS 5-in-1 Debug Tool</h2>
+<p style="color:#a6adc8">Mở tab Zalo (chat.zalo.me) trong cùng Chrome, rồi nhấn các nút bên dưới.<br>
+Kết quả sẽ hiện ở phía dưới.</p>
+
+<button onclick="runDebug()">🔍 1. Debug Scroll Container + Chat Items</button>
+<button onclick="testScroll()">📜 2. Test Scroll Lên 400px</button>
+<button onclick="findPackages()">📦 3. Tìm Đơn Hàng trong View</button>
+<button onclick="testLike()">❤️ 4. Test Like Đơn Đầu Tiên</button>
+<button onclick="clearOutput()">🗑️ Clear</button>
+
+<div id="output">Nhấn nút để bắt đầu debug...</div>
+
+<script>
+const out = document.getElementById('output');
+function log(msg, cls='') {
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.textContent = msg;
+    out.appendChild(line);
+    out.scrollTop = out.scrollHeight;
+}
+function clearOutput() { out.innerHTML = ''; }
+
+async function callZaloJS(code) {
+    const resp = await fetch('/api/eval-zalo-js', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ code })
+    });
+    return await resp.json();
+}
+
+async function runDebug() {
+    clearOutput();
+    log('=== DEBUG: Scroll Container & Chat Items ===', 'info');
+    const res = await callZaloJS(`
+        const sc = document.querySelector(window.zalo_scroll_container || '.transform-gpu') || 
+            Array.from(document.querySelectorAll('div')).reduce((b,el) => {
+                const s = window.getComputedStyle(el), r = el.getBoundingClientRect();
+                if ((s.overflowY==='scroll'||s.overflowY==='auto') && r.height>400 && r.width>400 && el.scrollHeight>el.clientHeight+100)
+                    if (!b || el.scrollHeight > b.scrollHeight) return el;
+                return b;
+            }, null);
+        
+        const items = Array.from(document.querySelectorAll(window.zalo_chat_item || '.chat-item'));
+        const msgItems = Array.from(document.querySelectorAll('.message-item'));
+        
+        const firstItems = items.slice(0,5).map((el,i) => ({
+            idx: i,
+            text: (el.innerText||'').substring(0,120).replace(/\\n/g,' '),
+            hasReact: (()=>{ const sp=el.querySelector(window.zalo_reaction_space || '.message-reaction-v2-space'); return sp ? sp.getBoundingClientRect().height>0 : false; })()
+        }));
+        
+        return {
+            scrollContainer: sc ? {
+                scrollTop: sc.scrollTop,
+                scrollHeight: sc.scrollHeight,
+                clientHeight: sc.clientHeight,
+                class: sc.className.substring(0,80)
+            } : null,
+            chatItemCount: items.length,
+            msgItemCount: msgItems.length,
+            firstItems
+        };
+    `);
+    if (res.error) { log('LỖI: ' + res.error, 'err'); return; }
+    const r = res.result;
+    if (r.scrollContainer) {
+        log('✅ Tìm thấy scroll container:', 'ok');
+        log(`   scrollTop=${r.scrollContainer.scrollTop}, scrollHeight=${r.scrollContainer.scrollHeight}, clientHeight=${r.scrollContainer.clientHeight}`, 'ok');
+        log(`   class: ${r.scrollContainer.class}`);
+    } else {
+        log('❌ KHÔNG tìm thấy scroll container!', 'err');
+    }
+    log(`📋 Chat items: ${r.chatItemCount}, Message items: ${r.msgItemCount}`, 'info');
+    log('');
+    log('5 chat-item đầu tiên:');
+    (r.firstItems||[]).forEach(it => {
+        log(`  [${it.idx}] hasReact=${it.hasReact} | ${it.text}`, it.hasReact ? 'warn' : '');
+    });
+}
+
+async function testScroll() {
+    log('=== TEST: Scroll Lên 400px ===', 'info');
+    const res = await callZaloJS(`
+        const sc = document.querySelector(window.zalo_scroll_container || '.transform-gpu') || 
+            Array.from(document.querySelectorAll('div')).reduce((b,el) => {
+                const s = window.getComputedStyle(el), r = el.getBoundingClientRect();
+                if ((s.overflowY==='scroll'||s.overflowY==='auto') && r.height>400 && r.width>400 && el.scrollHeight>el.clientHeight+100)
+                    if (!b || el.scrollHeight > b.scrollHeight) return el;
+                return b;
+            }, null);
+        if (!sc) return { error: 'No scroll container' };
+        const before = sc.scrollTop;
+        sc.scrollTop -= 400;
+        await new Promise(r=>setTimeout(r,200));
+        const after = sc.scrollTop;
+        return { before, after, diff: before - after };
+    `);
+    if (res.error) { log('LỖI: ' + res.error, 'err'); return; }
+    const r = res.result;
+    if (r.error) { log('❌ ' + r.error, 'err'); return; }
+    if (r.diff > 0) log(`✅ Đã scroll: ${r.before} → ${r.after} (đi lên ${r.diff}px)`, 'ok');
+    else log(`⚠️ Scroll không hiệu quả: ${r.before} → ${r.after}`, 'warn');
+}
+
+async function findPackages() {
+    log('=== TÌM ĐƠN HÀNG TRONG VIEW ===', 'info');
+    const res = await callZaloJS(`
+        const TRACKING_RE = /\\b(8[0-9]{12,14})\\b/g;
+        const WEIGHT_RE = /([0-9]+(?:\\.[0-9]+)?)\\s*kg/i;
+        const items = Array.from(document.querySelectorAll(window.zalo_chat_item || '.chat-item'));
+        const found = [];
+        items.forEach((el, i) => {
+            const text = el.innerText || '';
+            const trackings = [...text.matchAll(TRACKING_RE)].map(m=>m[1]);
+            if (trackings.length === 0) return;
+            const wm = text.match(WEIGHT_RE);
+            const sp = el.querySelector(window.zalo_reaction_space || '.message-reaction-v2-space');
+            const hasReact = sp ? sp.getBoundingClientRect().height > 0 : false;
+            found.push({ idx: i, trackings, weight: wm?wm[1]:null, hasReact, text: text.substring(0,80).replace(/\\n/g,' ') });
+        });
+        return { count: found.length, packages: found.slice(0,10) };
+    `);
+    if (res.error) { log('LỖI: ' + res.error, 'err'); return; }
+    const r = res.result;
+    log(`Tìm thấy ${r.count} đơn hàng trong DOM`, r.count > 0 ? 'ok' : 'warn');
+    (r.packages||[]).forEach(p => {
+        log(`  [${p.idx}] ${p.trackings.join(',')} | ${p.weight}kg | react=${p.hasReact}`, p.hasReact ? 'warn' : 'ok');
+        log(`    → ${p.text}`);
+    });
+}
+
+async function testLike() {
+    log('=== TEST LIKE ĐƠN ĐẦU TIÊN KHÔNG CÓ REACT ===', 'info');
+    const res = await callZaloJS(`
+        const TRACKING_RE = /\\b(8[0-9]{12,14})\\b/g;
+        const items = Array.from(document.querySelectorAll(window.zalo_chat_item || '.chat-item'));
+        let target = null, trk = null;
+        for (const el of items) {
+            const text = el.innerText || '';
+            const trackings = [...text.matchAll(TRACKING_RE)].map(m=>m[1]);
+            if (trackings.length === 0) continue;
+            const sp = el.querySelector(window.zalo_reaction_space || '.message-reaction-v2-space');
+            const hasReact = sp ? sp.getBoundingClientRect().height > 0 : false;
+            if (!hasReact) { target = el; trk = trackings[0]; break; }
+        }
+        if (!target) return { found: false, reason: 'No unreacted package found' };
+        
+        document.querySelectorAll('.zalo-text-target-bubble').forEach(e=>e.classList.remove('zalo-text-target-bubble'));
+        target.classList.add('zalo-text-target-bubble');
+        target.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+        
+        // Check for message frame selectors
+        const selectors = ['.message-frame', '.message-non-frame', '.message-content-render'];
+        const found_sels = selectors.filter(sel => target.querySelector(sel));
+        
+        // Check reaction button BEFORE hover
+        const thumbBefore = target.querySelector('.default-react-icon-thumb');
+        
+        return { 
+            found: true, 
+            trk,
+            scrolled: true,
+            foundSelectors: found_sels,
+            thumbBeforeHover: thumbBefore ? 'exists' : 'not visible yet (need hover)',
+            note: 'Tagged as zalo-text-target-bubble. Now need to hover to show reaction btn.'
+        };
+    `);
+    if (res.error) { log('LỖI: ' + res.error, 'err'); return; }
+    const r = res.result;
+    if (!r.found) { log('⚠️ ' + r.reason, 'warn'); return; }
+    log(`✅ Tìm thấy đơn: ${r.trk}`, 'ok');
+    log(`   Selectors: ${r.foundSelectors.join(', ')}`, 'info');
+    log(`   .default-react-icon-thumb: ${r.thumbBeforeHover}`, 'warn');
+    log(`   → ${r.note}`, 'info');
+    log('');
+    log('Ghi chú: Nút tim chỉ xuất hiện sau khi HOVER chuột. Playwright hover() sẽ trigger nó.', 'warn');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,1083 @@
+import os
+from filelock import FileLock
+import sys
+import json
+import time
+import tkinter as tk
+from tkinter import ttk, messagebox
+import threading
+import platform
+
+try:
+    import win32gui
+    import win32con
+    HAS_WIN32 = True
+except ImportError:
+    HAS_WIN32 = False
+
+# Set output encoding to UTF-8
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
+# Constants & Paths
+if hasattr(sys, '_MEIPASS'):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+SCANNED_FILE = os.path.join(DATA_DIR, "scanned_packages.json")
+
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+class JMSPopupApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("JMS Helper Popup - J&T Express")
+        self.root.geometry("680x560")
+        self.root.attributes("-topmost", True)  # Always on top
+        self.root.configure(bg="#f4f6f9")
+
+        self.packages = []           # Full in-memory list mirroring the JSON
+        self.rendered_tracking = set()  # Set of tracking numbers currently rendered in UI
+        self.row_widgets = {}        # Map tracking -> row_frame widget
+        self.last_mtime = 0
+        self.spinner_idx = 0
+        self.spinner_active = False
+        self.current_tab = "jms"
+
+        self.colors = {
+            "bg_dark": "#f4f6f9",
+            "bg_card": "#ffffff",
+            "bg_hover": "#fff0f1",
+            "text": "#2d3436",
+            "text_muted": "#636e72",
+            "accent": "#E61B23",
+            "green": "#1e824c",
+            "blue": "#0984e3",
+            "red": "#d63031",
+            "yellow": "#fdcb6e",
+            "border": "#dcdde1"
+        }
+
+        self.setup_ui()
+        self.initial_load()
+        self.check_updates_loop()
+
+    # ─── UI Setup ──────────────────────────────────────────────────────────────
+
+    def setup_ui(self):
+        # Header frame
+        header = tk.Frame(self.root, bg=self.colors["bg_dark"], height=60)
+        header.pack(fill=tk.X, padx=15, pady=(15, 0))
+        header.bind("<Configure>", self.on_header_configure)
+
+        # Title container for responsive hiding
+        self.title_container = tk.Frame(header, bg=self.colors["bg_dark"])
+        self.title_container.pack(side=tk.LEFT)
+
+        self.title_label = tk.Label(
+            self.title_container,
+            text="J&T EXPRESS HELPER",
+            font=("Segoe UI", 13, "bold"),
+            fg=self.colors["accent"],
+            bg=self.colors["bg_dark"]
+        )
+        self.title_label.pack(side=tk.LEFT)
+
+        self.desc_label = tk.Label(
+            self.title_container,
+            text=" (Luôn hiển thị trên cùng)",
+            font=("Segoe UI", 9, "italic"),
+            fg=self.colors["text_muted"],
+            bg=self.colors["bg_dark"]
+        )
+        self.desc_label.pack(side=tk.LEFT, pady=3)
+
+        # Spinner label — shown when auto-updating
+        self.spinner_label = tk.Label(
+            header,
+            text="",
+            font=("Segoe UI", 11),
+            fg=self.colors["accent"],
+            bg=self.colors["bg_dark"]
+        )
+        self.spinner_label.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Status label (e.g. "3 đơn sẵn sàng")
+        self.status_label = tk.Label(
+            header,
+            text="",
+            font=("Segoe UI", 9, "bold"),
+            fg=self.colors["text_muted"],
+            bg=self.colors["bg_dark"]
+        )
+        self.status_label.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Refresh button
+        btn_refresh = tk.Button(
+            header,
+            text="🔄 Làm mới",
+            command=self.force_reload,
+            bg=self.colors["bg_card"],
+            fg=self.colors["text"],
+            activebackground=self.colors["bg_hover"],
+            activeforeground=self.colors["accent"],
+            bd=1,
+            relief=tk.SOLID,
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=4
+        )
+        btn_refresh.pack(side=tk.RIGHT)
+
+        # Select All button
+        self.btn_select_all = tk.Button(
+            header,
+            text="📋 Chọn tất cả",
+            command=self.toggle_select_all,
+            bg=self.colors["bg_card"],
+            fg=self.colors["text"],
+            activebackground=self.colors["bg_hover"],
+            activeforeground=self.colors["accent"],
+            bd=1,
+            relief=tk.SOLID,
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=4
+        )
+        self.btn_select_all.pack(side=tk.RIGHT, padx=(0, 5))
+
+        # Delete Selected button
+        btn_delete = tk.Button(
+            header,
+            text="🗑️ Xóa đã chọn",
+            command=self.delete_selected,
+            bg=self.colors["red"],
+            fg="#ffffff",
+            activebackground=self.colors["accent"],
+            activeforeground="#ffffff",
+            bd=0,
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=5
+        )
+        btn_delete.pack(side=tk.RIGHT, padx=(0, 5))
+
+        # Separator line
+        sep = tk.Frame(self.root, height=1, bg=self.colors["border"])
+        sep.pack(fill=tk.X, padx=15, pady=(8, 0))
+
+        # Search frame
+        search_frame = tk.Frame(self.root, bg=self.colors["bg_dark"])
+        search_frame.pack(fill=tk.X, padx=15, pady=(10, 0))
+
+        tk.Label(
+            search_frame,
+            text="🔍 Tìm kiếm MĐV:",
+            font=("Segoe UI", 10, "bold"),
+            fg=self.colors["accent"],
+            bg=self.colors["bg_dark"]
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *args: self.filter_packages())
+        self.search_entry = tk.Entry(
+            search_frame,
+            textvariable=self.search_var,
+            bg=self.colors["bg_card"],
+            fg=self.colors["text"],
+            insertbackground=self.colors["text"],
+            bd=1,
+            relief=tk.SOLID,
+            font=("Segoe UI", 11)
+        )
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=4)
+
+        btn_clear_search = tk.Button(
+            search_frame,
+            text="✕",
+            command=lambda: self.search_var.set(""),
+            bg=self.colors["bg_card"],
+            fg=self.colors["text_muted"],
+            activebackground=self.colors["bg_hover"],
+            activeforeground=self.colors["accent"],
+            bd=1,
+            relief=tk.SOLID,
+            font=("Segoe UI", 9, "bold"),
+            padx=10,
+            pady=2
+        )
+        btn_clear_search.pack(side=tk.LEFT, padx=(4, 0))
+
+        # Tabs frame (Segmented Control)
+        self.tabs_frame = tk.Frame(self.root, bg=self.colors["bg_dark"])
+        self.tabs_frame.pack(fill=tk.X, padx=15, pady=(10, 0))
+
+        self.tab_jms_btn = tk.Button(
+            self.tabs_frame,
+            text="🚀 ĐƠN JMS UPLOAD (0)",
+            command=lambda: self.switch_tab("jms"),
+            font=("Segoe UI", 10, "bold"),
+            bd=1,
+            relief=tk.SOLID,
+            padx=15,
+            pady=8,
+            cursor="hand2"
+        )
+        self.tab_jms_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.tab_manual_btn = tk.Button(
+            self.tabs_frame,
+            text="🛠️ ĐƠN THỦ CÔNG (0)",
+            command=lambda: self.switch_tab("manual"),
+            font=("Segoe UI", 10, "bold"),
+            bd=1,
+            relief=tk.SOLID,
+            padx=15,
+            pady=8,
+            cursor="hand2"
+        )
+        self.tab_manual_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+
+        # Container frame for Canvas + Scrollbar
+        container = tk.Frame(self.root, bg=self.colors["bg_dark"], bd=1, relief=tk.SOLID)
+        container.pack(fill=tk.BOTH, expand=True, padx=15, pady=10)
+
+        self.canvas = tk.Canvas(container, bg=self.colors["bg_card"], bd=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.canvas.yview)
+
+        self.scroll_frame = tk.Frame(self.canvas, bg=self.colors["bg_card"])
+
+        self.scroll_frame_id = self.canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        self.scroll_frame.bind("<Configure>", self.on_frame_configure)
+        self.canvas.bind("<Configure>", self.on_canvas_configure)
+        self.root.bind_all("<MouseWheel>", self.on_mousewheel)
+
+        # Footer build author info
+        footer = tk.Frame(self.root, bg=self.colors["bg_dark"])
+        footer.pack(fill=tk.X, side=tk.BOTTOM, padx=15, pady=(0, 10))
+        
+        author_label = tk.Label(
+            footer,
+            text="Người build App : Nguyễn Đình Nguyên Chương",
+            font=("Segoe UI", 8, "italic"),
+            fg=self.colors["text_muted"],
+            bg=self.colors["bg_dark"]
+        )
+        author_label.pack(side=tk.RIGHT)
+
+        # Placeholder label (shown when no packages yet)
+        self.placeholder_label = tk.Label(
+            self.scroll_frame,
+            text="Chưa có đơn hàng nào tải đầy đủ 3 ảnh + 1 video.",
+            font=("Segoe UI", 10),
+            fg=self.colors["text_muted"],
+            bg=self.colors["bg_card"]
+        )
+
+    def on_frame_configure(self, event):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def on_canvas_configure(self, event):
+        self.canvas.itemconfig(self.scroll_frame_id, width=event.width)
+
+    def on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    # ─── Data Loading ───────────────────────────────────────────────────────────
+
+    def initial_load(self):
+        """First-time load: build the full list from scratch."""
+        if not os.path.exists(SCANNED_FILE):
+            self._show_placeholder()
+            return
+        try:
+            with FileLock(SCANNED_FILE + '.lock', timeout=5), open(SCANNED_FILE, "r", encoding="utf-8") as f:
+                self.packages = json.load(f)
+        except Exception:
+            self.packages = []
+
+        if not isinstance(self.packages, list):
+            if isinstance(self.packages, dict):
+                self.packages = list(self.packages.values())
+            else:
+                self.packages = []
+
+        self.filter_packages()
+
+    def force_reload(self):
+        """Manual refresh — clears and rebuilds the UI completely."""
+        # Keep copied states from memory before clearing
+        copied_map = {}
+        for p in self.packages:
+            if isinstance(p, dict) and p.get("trackingNumber"):
+                copied_map[p["trackingNumber"]] = p.get("copied", False)
+
+        for child in self.scroll_frame.winfo_children():
+            child.destroy()
+        self.rendered_tracking.clear()
+        self.row_widgets.clear()
+
+        if not os.path.exists(SCANNED_FILE):
+            self._show_placeholder()
+            return
+        try:
+            with FileLock(SCANNED_FILE + '.lock', timeout=5), open(SCANNED_FILE, "r", encoding="utf-8") as f:
+                self.packages = json.load(f)
+        except Exception:
+            self.packages = []
+
+        if not isinstance(self.packages, list):
+            if isinstance(self.packages, dict):
+                self.packages = list(self.packages.values())
+            else:
+                self.packages = []
+
+        # Restore copied states that were in memory but might not be on disk yet
+        for pkg in self.packages:
+            if isinstance(pkg, dict) and pkg.get("trackingNumber"):
+                trk = pkg.get("trackingNumber")
+                if trk in copied_map and copied_map[trk]:
+                    pkg["copied"] = True
+
+        self.filter_packages()
+
+    def filter_packages(self):
+        query = self.search_var.get().strip().lower()
+
+        # Clear current rows from the scroll frame
+        placeholder_exists = self.placeholder_label.winfo_exists()
+        for child in self.scroll_frame.winfo_children():
+            if placeholder_exists and child == self.placeholder_label:
+                continue
+            child.destroy()
+
+        self.rendered_tracking.clear()
+        self.row_widgets.clear()
+
+        ready = [p for p in self.packages if isinstance(p, dict) and (p.get("localStatus") == "Đã tải về" or str(p.get("localStatus", "")).startswith("Lỗi"))]
+
+        if self.current_tab == "jms":
+            ready = [p for p in ready if p.get("localStatus") == "Đã tải về"]
+        else:
+            ready = [p for p in ready if str(p.get("localStatus", "")).startswith("Lỗi")]
+
+        if query:
+            ready = [p for p in ready if query in p.get("trackingNumber", "").lower()]
+
+        if not ready:
+            self._show_placeholder()
+        else:
+            self.placeholder_label.pack_forget()
+            for pkg in ready:
+                self._add_row(pkg)
+            
+            # Khắc phục lỗi phải lăn lên: Scroll về đầu canvas mỗi khi gõ tìm kiếm mới
+            self.canvas.yview_moveto(0)
+
+        self._update_status_label()
+        self._update_select_all_btn_text()
+        self.update_tab_ui()
+
+    def switch_tab(self, tab_name):
+        self.current_tab = tab_name
+        self.filter_packages()
+
+    def update_tab_ui(self):
+        jms_count = len([p for p in self.packages if isinstance(p, dict) and p.get("localStatus") == "Đã tải về"])
+        manual_count = len([p for p in self.packages if isinstance(p, dict) and str(p.get("localStatus", "")).startswith("Lỗi")])
+
+        if self.current_tab == "jms":
+            self.tab_jms_btn.configure(
+                text=f"🚀 ĐƠN JMS UPLOAD ({jms_count})",
+                bg=self.colors["accent"],
+                fg="#ffffff",
+                activebackground=self.colors["accent"],
+                activeforeground="#ffffff",
+                relief=tk.FLAT
+            )
+            self.tab_manual_btn.configure(
+                text=f"🛠️ ĐƠN THỦ CÔNG ({manual_count})",
+                bg=self.colors["bg_card"],
+                fg=self.colors["text_muted"],
+                activebackground=self.colors["bg_hover"],
+                activeforeground=self.colors["text"],
+                relief=tk.SOLID,
+                bd=1
+            )
+        else:
+            self.tab_jms_btn.configure(
+                text=f"🚀 ĐƠN JMS UPLOAD ({jms_count})",
+                bg=self.colors["bg_card"],
+                fg=self.colors["text_muted"],
+                activebackground=self.colors["bg_hover"],
+                activeforeground=self.colors["text"],
+                relief=tk.SOLID,
+                bd=1
+            )
+            self.tab_manual_btn.configure(
+                text=f"🛠️ ĐƠN THỦ CÔNG ({manual_count})",
+                bg=self.colors["yellow"],
+                fg=self.colors["text"],
+                activebackground=self.colors["yellow"],
+                activeforeground=self.colors["text"],
+                relief=tk.FLAT
+            )
+
+    def on_header_configure(self, event):
+        width = event.width
+        if width < 620:
+            self.title_container.pack_forget()
+        else:
+            self.title_container.pack(side=tk.LEFT, before=self.spinner_label)
+
+    def _show_placeholder(self):
+        try:
+            # Recreate if destroyed (e.g. after force_reload clears scroll_frame children)
+            if not self.placeholder_label.winfo_exists():
+                self.placeholder_label = tk.Label(
+                    self.scroll_frame,
+                    text="Chưa có đơn hàng nào tải đầy đủ 3 ảnh + 1 video.",
+                    font=("Segoe UI", 10),
+                    fg=self.colors["text_muted"],
+                    bg=self.colors["bg_card"]
+                )
+            self.placeholder_label.pack(pady=40)
+        except Exception:
+            pass
+
+    def _update_status_label(self):
+        ready_count = len(self.rendered_tracking)
+        if ready_count == 0:
+            self.status_label.configure(text="")
+        else:
+            if self.current_tab == "jms":
+                self.status_label.configure(text=f"| {ready_count} đơn sẵn sàng")
+            else:
+                self.status_label.configure(text=f"| {ready_count} đơn lỗi cần xử lý")
+
+    def toggle_select_all(self):
+        if self.current_tab == "jms":
+            ready_packages = [p for p in self.packages if isinstance(p, dict) and p.get("localStatus") == "Đã tải về"]
+        else:
+            ready_packages = [p for p in self.packages if isinstance(p, dict) and str(p.get("localStatus", "")).startswith("Lỗi")]
+
+        if not ready_packages:
+            return
+            
+        unchecked_exists = any(not p.get("copied", False) for p in ready_packages)
+        target_state = True if unchecked_exists else False
+
+        for p in ready_packages:
+            p["copied"] = target_state
+
+        for trk, row_frame in self.row_widgets.items():
+            if hasattr(row_frame, "chk_var"):
+                row_frame.chk_var.set(target_state)
+            
+            if target_state:
+                new_bg = self.colors["bg_hover"]
+                new_border = self.colors["green"]
+                new_thickness = 3
+            else:
+                new_bg = self.colors["bg_card"]
+                new_border = self.colors["border"]
+                new_thickness = 1
+            
+            row_frame.configure(bg=new_bg, highlightbackground=new_border, highlightthickness=new_thickness)
+            folder_badge_text = f"#{self.get_folder_name_by_tracking(trk)}"
+            for child in row_frame.winfo_children():
+                cls = child.winfo_class()
+                if cls == "Label":
+                    if child.cget("text") == folder_badge_text:
+                        continue
+                    child.configure(bg=new_bg)
+                elif cls == "Checkbutton":
+                    child.configure(bg=new_bg, activebackground=new_bg)
+
+        self._update_select_all_btn_text()
+        self._save_packages_to_disk()
+
+    def _update_select_all_btn_text(self):
+        if self.current_tab == "jms":
+            ready_packages = [p for p in self.packages if isinstance(p, dict) and p.get("localStatus") == "Đã tải về"]
+        else:
+            ready_packages = [p for p in self.packages if isinstance(p, dict) and str(p.get("localStatus", "")).startswith("Lỗi")]
+
+        if not ready_packages:
+            self.btn_select_all.configure(text="📋 Chọn tất cả")
+            return
+        all_checked = all(p.get("copied", False) for p in ready_packages)
+        if all_checked:
+            self.btn_select_all.configure(text="🔓 Bỏ chọn tất cả")
+        else:
+            self.btn_select_all.configure(text="📋 Chọn tất cả")
+
+    def _save_packages_to_disk(self):
+        try:
+            with FileLock(SCANNED_FILE + '.lock', timeout=5), open(SCANNED_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.packages, f, ensure_ascii=False, indent=4)
+            self.last_mtime = os.path.getmtime(SCANNED_FILE)
+        except Exception as e:
+            print(f"[Popup] _save_packages_to_disk error: {e}")
+
+    def delete_selected(self):
+        if self.current_tab == "jms":
+            ready_packages = [p for p in self.packages if isinstance(p, dict) and p.get("localStatus") == "Đã tải về"]
+        else:
+            ready_packages = [p for p in self.packages if isinstance(p, dict) and str(p.get("localStatus", "")).startswith("Lỗi")]
+
+        selected = [p for p in ready_packages if p.get("copied", False)]
+
+        if not selected:
+            messagebox.showwarning("Không có đơn chọn", "Vui lòng tích chọn (Đã copy) các đơn hàng cần xóa.")
+            return
+
+        confirm = messagebox.askyesno(
+            "Xác nhận xóa đơn",
+            f"Bạn có chắc chắn muốn xóa {len(selected)} đơn hàng đã chọn?\n\n"
+            "⚠️ LƯU Ý: Hành động này sẽ xóa vĩnh viễn dữ liệu đơn hàng và toàn bộ ảnh/video liên quan trên ổ đĩa."
+        )
+
+        if not confirm:
+            return
+
+        import shutil
+        deleted_count = 0
+
+        for pkg in selected:
+            trk = pkg.get("trackingNumber")
+            folder_name = pkg.get("folderName")
+            
+            if folder_name:
+                folder_path = os.path.join(DATA_DIR, folder_name)
+                if os.path.exists(folder_path) and os.path.isdir(folder_path):
+                    try:
+                        shutil.rmtree(folder_path)
+                    except Exception as err:
+                        print(f"[Popup] Lỗi xóa thư mục {folder_path}: {err}")
+
+            row_frame = self.row_widgets.get(trk)
+            if row_frame:
+                row_frame.destroy()
+                self.row_widgets.pop(trk, None)
+
+            self.rendered_tracking.discard(trk)
+            self.packages = [p for p in self.packages if p.get("trackingNumber") != trk]
+            deleted_count += 1
+
+        self._save_packages_to_disk()
+        self._update_status_label()
+        self._update_select_all_btn_text()
+
+        remaining_ready = [p for p in self.packages if isinstance(p, dict) and p.get("localStatus") == "Đã tải về"]
+        if not remaining_ready:
+            self._show_placeholder()
+
+        self.show_toast(f"Đã xóa thành công {deleted_count} đơn hàng!")
+
+    # ─── Incremental update (no full redraw) ────────────────────────────────────
+
+    def check_updates_loop(self):
+        """Poll file every 1 second. Only add NEW rows, never destroy existing ones."""
+        try:
+            if os.path.exists(SCANNED_FILE):
+                mtime = os.path.getmtime(SCANNED_FILE)
+                if mtime != self.last_mtime:
+                    self.last_mtime = mtime
+                    self._incremental_update()
+        except Exception as e:
+            print(f"[Popup] check_updates_loop error: {e}")
+        self.root.after(1000, self.check_updates_loop)
+
+    def _incremental_update(self):
+        """Read the file and only append rows for newly downloaded packages."""
+        try:
+            with FileLock(SCANNED_FILE + '.lock', timeout=5), open(SCANNED_FILE, "r", encoding="utf-8") as f:
+                new_packages = json.load(f)
+        except Exception:
+            return
+
+        if not isinstance(new_packages, list):
+            if isinstance(new_packages, dict):
+                new_packages = list(new_packages.values())
+            else:
+                new_packages = []
+
+        # Build a map of what's on disk for fast lookup
+        disk_map = {}
+        for p in new_packages:
+            if isinstance(p, dict) and p.get("trackingNumber"):
+                disk_map[p["trackingNumber"]] = p
+
+        # --- Step 1: Merge disk data into self.packages (preserve in-memory copied state) ---
+        existing_trk_set = {p.get("trackingNumber") for p in self.packages if isinstance(p, dict) and p.get("trackingNumber")}
+        for pkg in new_packages:
+            if not isinstance(pkg, dict):
+                continue
+            trk = pkg.get("trackingNumber")
+            if not trk:
+                continue
+            if trk not in existing_trk_set:
+                self.packages.append(pkg)
+                existing_trk_set.add(trk)
+            else:
+                # Update metadata but preserve in-memory copied state
+                mem_pkg = next((p for p in self.packages if isinstance(p, dict) and p.get("trackingNumber") == trk), None)
+                if mem_pkg:
+                    mem_copied = mem_pkg.get("copied", False)
+                    mem_pkg.update(pkg)
+                    # Never overwrite a True copied state with a False from disk
+                    if mem_copied:
+                        mem_pkg["copied"] = True
+
+        # --- Step 2: Add new rows for packages that became "Đã tải về" ------
+        new_rows_added = 0
+        for pkg in self.packages:
+            if not isinstance(pkg, dict):
+                continue
+            trk = pkg.get("trackingNumber")
+            if not trk:
+                continue
+            is_valid_status = pkg.get("localStatus") == "Đã tải về" or str(pkg.get("localStatus", "")).startswith("Lỗi")
+            if is_valid_status and trk not in self.rendered_tracking:
+                query = self.search_var.get().strip().lower()
+                if query and query not in trk.lower():
+                    continue
+                self.placeholder_label.pack_forget()
+                self._add_row(pkg)
+                new_rows_added += 1
+
+        if new_rows_added > 0:
+            self._show_spinner()
+            self._update_status_label()
+        self._update_select_all_btn_text()
+
+    def _show_spinner(self):
+        """Flash a spinner briefly to signal that new data arrived."""
+        if self.spinner_active:
+            return
+        self.spinner_active = True
+        self._animate_spinner(frames=8)
+
+    def _animate_spinner(self, frames):
+        if frames <= 0:
+            self.spinner_label.configure(text="")
+            self.spinner_active = False
+            return
+        self.spinner_idx = (self.spinner_idx + 1) % len(SPINNER_FRAMES)
+        self.spinner_label.configure(text=SPINNER_FRAMES[self.spinner_idx])
+        self.root.after(80, lambda: self._animate_spinner(frames - 1))
+
+    # ─── Row rendering ──────────────────────────────────────────────────────────
+
+    def _add_row(self, pkg):
+        """Append a single row to the bottom of the scroll list."""
+        tracking = pkg.get("trackingNumber", "")
+        if not tracking or tracking in self.rendered_tracking:
+            return
+
+        self.rendered_tracking.add(tracking)
+        self._render_row(pkg)
+
+    def _render_row(self, pkg):
+        tracking = pkg.get("trackingNumber", "")
+        weight = pkg.get("weight")
+        weight_str = f"{weight} kg" if weight is not None else "0 kg"
+        folder_idx = pkg.get("folderName") or "?"
+        copied = pkg.get("copied", False)
+
+        # Check if error or missing files
+        local_status = pkg.get("localStatus", "")
+        is_error = str(local_status).startswith("Lỗi") or local_status == "Chưa tải về"
+
+        row_bg = self.colors["bg_hover"] if copied else self.colors["bg_card"]
+        row_frame = tk.Frame(
+            self.scroll_frame,
+            bg=row_bg,
+            bd=1,
+            relief=tk.FLAT,
+            highlightbackground=self.colors["green"] if copied else self.colors["border"],
+            highlightthickness=3 if copied else 1,
+            padx=10,
+            pady=8
+        )
+        row_frame.pack(fill=tk.X, pady=4)
+
+        self.row_widgets[tracking] = row_frame
+
+        # Folder badge
+        tk.Label(
+            row_frame,
+            text=f"#{folder_idx}",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.colors["bg_dark"],
+            fg=self.colors["accent"],
+            padx=6, pady=2, bd=0
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        # Tracking number label
+        tk.Label(
+            row_frame,
+            text=tracking,
+            font=("Segoe UI", 10, "bold"),
+            fg=self.colors["text"],
+            bg=row_bg
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Copy tracking button
+        tk.Button(
+            row_frame,
+            text="📋 Copy MĐV",
+            command=lambda t=tracking: self.copy_text(t, "Mã vận đơn"),
+            bg=self.colors["bg_card"],
+            fg=self.colors["blue"],
+            activebackground=self.colors["bg_hover"],
+            activeforeground=self.colors["blue"],
+            font=("Segoe UI", 8, "bold"),
+            bd=1, relief=tk.SOLID, padx=6, pady=2, cursor="hand2"
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Weight label
+        weight_val = str(weight) if weight is not None else "0"
+        tk.Label(
+            row_frame,
+            text=weight_str,
+            font=("Segoe UI", 10, "bold"),
+            fg=self.colors["accent"],
+            bg=row_bg
+        ).pack(side=tk.LEFT, padx=(12, 4))
+
+        # Copy weight button
+        tk.Button(
+            row_frame,
+            text="📋 Cân",
+            command=lambda w=weight_val, t=tracking: self.copy_weight(w, t),
+            bg=self.colors["bg_card"],
+            fg=self.colors["text_muted"],
+            activebackground=self.colors["bg_hover"],
+            activeforeground=self.colors["text"],
+            font=("Segoe UI", 8, "bold"),
+            bd=1, relief=tk.SOLID, padx=6, pady=2, cursor="hand2"
+        ).pack(side=tk.LEFT, padx=3)
+
+        # "Đã copy" checkbox
+        chk_var = tk.BooleanVar(value=copied)
+        chk = tk.Checkbutton(
+            row_frame,
+            text="Đã copy",
+            variable=chk_var,
+            command=lambda t=tracking, v=chk_var: self.toggle_copied_state(t, v.get()),
+            bg=row_bg,
+            fg=self.colors["text"],
+            activebackground=row_bg,
+            activeforeground=self.colors["text"],
+            selectcolor=self.colors["bg_dark"]
+        )
+        chk.pack(side=tk.RIGHT, padx=5)
+        row_frame.chk_var = chk_var
+
+        if is_error:
+            # Manual Button instead of JMS Upload
+            tk.Button(
+                row_frame,
+                text="🛠️ Thủ công",
+                command=lambda t=tracking: self.manual_jms_helper(t),
+                bg=self.colors["yellow"],
+                fg=self.colors["text"],
+                activebackground=self.colors["accent"],
+                activeforeground="#ffffff",
+                font=("Segoe UI", 9, "bold"),
+                bd=0, padx=8, pady=4, cursor="hand2"
+            ).pack(side=tk.RIGHT, padx=10)
+            
+            # Label saying no media
+            tk.Label(
+                row_frame,
+                text="⚠️ Không có ảnh & video",
+                font=("Segoe UI", 9, "bold"),
+                fg=self.colors["red"],
+                bg=row_bg
+            ).pack(side=tk.RIGHT, padx=5)
+        else:
+            # JMS Upload button
+            tk.Button(
+                row_frame,
+                text="🚀 JMS Upload",
+                command=lambda t=tracking: self.automate_jms_upload(t),
+                bg=self.colors["accent"],
+                fg="#ffffff",
+                activebackground=self.colors["red"],
+                activeforeground="#ffffff",
+                font=("Segoe UI", 9, "bold"),
+                bd=0, padx=8, pady=4, cursor="hand2"
+            ).pack(side=tk.RIGHT, padx=10)
+
+    def manual_jms_helper(self, tracking_number):
+        weight_val = "0"
+        for pkg in self.packages:
+            if pkg.get("trackingNumber") == tracking_number:
+                weight_val = str(pkg.get("weight") if pkg.get("weight") is not None else "0")
+                break
+                
+        # Copy tracking number to clipboard
+        self.root.clipboard_clear()
+        self.root.clipboard_append(tracking_number)
+        
+        self.toggle_copied_state(tracking_number, True)
+        self.show_toast(f"Đã copy Mã: {tracking_number}")
+        
+        messagebox.showinfo(
+            "Thao tác thủ công",
+            f"Đơn hàng này không có hình ảnh hoặc video làm bằng chứng trên Zalo.\n\n"
+            f"👉 Đã copy Mã vận đơn: {tracking_number} (Bạn có thể dán bằng Ctrl+V)\n"
+            f"👉 Số ký (Cân nặng): {weight_val} kg (Vui lòng tự nhập tay)\n\n"
+            "Vui lòng tự tìm kiếm đơn hàng trên JMS và thực hiện đối soát thủ công!"
+        )
+
+    # ─── Actions ────────────────────────────────────────────────────────────────
+
+    def copy_text(self, text, type_name):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.toggle_copied_state(text, True)
+        self.show_toast(f"Đã copy {type_name}: {text}")
+
+    def copy_weight(self, weight_val, tracking_number):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(weight_val)
+        self.toggle_copied_state(tracking_number, True)
+        self.show_toast(f"Đã copy Cân nặng: {weight_val} kg")
+
+    def show_toast(self, message):
+        toast = tk.Toplevel(self.root)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        toast.configure(bg="#2ecc71")
+
+        label = tk.Label(toast, text=message, fg="#ffffff", bg="#2ecc71",
+                         font=("Segoe UI", 10, "bold"), padx=15, pady=8)
+        label.pack()
+
+        # Position toast near bottom-center of parent window
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 300) // 2
+        y = self.root.winfo_y() + self.root.winfo_height() - 60
+        toast.geometry(f"+{x}+{y}")
+        self.root.after(1500, toast.destroy)
+
+    def toggle_copied_state(self, tracking_number, is_copied):
+        # 1. Update in-memory list (source of truth)
+        for pkg in self.packages:
+            if pkg.get("trackingNumber") == tracking_number:
+                pkg["copied"] = is_copied
+                break
+
+        # 2. Persist to disk WITHOUT triggering a full reload
+        #    We read current file content from disk, update only the target tracking's copied status, and write back.
+        try:
+            disk_packages = []
+            if os.path.exists(SCANNED_FILE):
+                with FileLock(SCANNED_FILE + '.lock', timeout=5), open(SCANNED_FILE, "r", encoding="utf-8") as f:
+                    try:
+                        disk_packages = json.load(f)
+                    except Exception:
+                        disk_packages = self.packages
+            else:
+                disk_packages = self.packages
+
+            # Update copied state on disk packages
+            found = False
+            for p in disk_packages:
+                if p.get("trackingNumber") == tracking_number:
+                    p["copied"] = is_copied
+                    found = True
+                    break
+            
+            # If not found on disk, append from self.packages
+            if not found:
+                pkg_to_add = next((p for p in self.packages if p.get("trackingNumber") == tracking_number), None)
+                if pkg_to_add:
+                    disk_packages.append(pkg_to_add)
+
+            # Write back
+            with FileLock(SCANNED_FILE + '.lock', timeout=5), open(SCANNED_FILE, "w", encoding="utf-8") as f:
+                json.dump(disk_packages, f, ensure_ascii=False, indent=4)
+            # Update last_mtime so check_updates_loop doesn't react to our own write
+            self.last_mtime = os.path.getmtime(SCANNED_FILE)
+            
+            # Sync self.packages with disk data
+            self.packages = disk_packages
+        except Exception as e:
+            print(f"[Popup] toggle_copied_state write error: {e}")
+
+        # 3. Update only the specific row widget in-place (no redraw)
+        row_frame = self.row_widgets.get(tracking_number)
+        if not row_frame:
+            return
+
+        if hasattr(row_frame, "chk_var"):
+            row_frame.chk_var.set(is_copied)
+
+        folder_badge_text = f"#{self.get_folder_name_by_tracking(tracking_number)}"
+        if is_copied:
+            new_bg = self.colors["bg_hover"]
+            new_border = self.colors["green"]
+            new_thickness = 3
+        else:
+            new_bg = self.colors["bg_card"]
+            new_border = self.colors["border"]
+            new_thickness = 1
+
+        row_frame.configure(bg=new_bg, highlightbackground=new_border, highlightthickness=new_thickness)
+        for child in row_frame.winfo_children():
+            cls = child.winfo_class()
+            if cls == "Label":
+                # Skip the dark badge label (folder index)
+                if child.cget("text") == folder_badge_text:
+                    continue
+                child.configure(bg=new_bg)
+            elif cls == "Checkbutton":
+                child.configure(bg=new_bg, activebackground=new_bg)
+
+    def get_folder_name_by_tracking(self, tracking_number):
+        for pkg in self.packages:
+            if pkg.get("trackingNumber") == tracking_number:
+                return pkg.get("folderName") or "?"
+        return "?"
+
+    # ─── JMS Upload via Win32 dialog injection ───────────────────────────────────
+
+    def automate_jms_upload(self, tracking_number):
+        if not HAS_WIN32:
+            messagebox.showwarning("Không hỗ trợ", "Tính năng tự động upload chỉ hỗ trợ trên Windows.")
+            return
+
+        package_dir = None
+        if os.path.exists(DATA_DIR):
+            for item in os.listdir(DATA_DIR):
+                item_path = os.path.join(DATA_DIR, item)
+                if os.path.isdir(item_path):
+                    if os.path.exists(os.path.join(item_path, f"{tracking_number}.txt")):
+                        package_dir = item_path
+                        break
+
+        if not package_dir:
+            fallback = os.path.join(DATA_DIR, tracking_number)
+            if os.path.exists(fallback) and os.path.isdir(fallback):
+                package_dir = fallback
+
+        if not package_dir:
+            messagebox.showwarning(
+                "Không tìm thấy thư mục",
+                f"Thư mục chứa ảnh/video của mã đơn {tracking_number} không tồn tại."
+            )
+            return
+
+        import re
+        files = []
+        for f in os.listdir(package_dir):
+            if os.path.isfile(os.path.join(package_dir, f)):
+                name_lower = f.lower()
+                if name_lower.endswith('.txt'):
+                    continue
+                if re.match(r'^(image|video)_\d+\.(jpg|jpeg|png|mp4)$', name_lower):
+                    files.append(os.path.join(package_dir, f))
+
+        if not files:
+            messagebox.showwarning(
+                "Không có tệp tin",
+                f"Không có ảnh hay video nào trong thư mục của đơn {tracking_number}!"
+            )
+            return
+
+        hwnd_dialog = self.find_file_dialog()
+        if not hwnd_dialog:
+            messagebox.showwarning(
+                "Hộp thoại chưa mở",
+                "Không tìm thấy hộp thoại Chọn Tệp (Open Dialog) của Windows!\n\n"
+                "👉 Vui lòng click vào dấu cộng '+' (Bấm tải lên) trên hệ thống JMS trước, sau đó bấm nút này."
+            )
+            return
+
+        success = self.inject_files_into_dialog(hwnd_dialog, files)
+        if success:
+            self.show_toast(f"Đã tự động tải lên {len(files)} tệp tin!")
+        else:
+            messagebox.showerror(
+                "Lỗi tải lên",
+                "Không thể tự động điền file vào hộp thoại.\n"
+                "Hãy chắc chắn hộp thoại Chọn tệp Windows đang mở trên màn hình."
+            )
+
+    def find_file_dialog(self):
+        dialogs = []
+        def enum_windows_callback(hwnd, extra):
+            if win32gui.IsWindowVisible(hwnd):
+                class_name = win32gui.GetClassName(hwnd)
+                if class_name == "#32770":
+                    title = win32gui.GetWindowText(hwnd).lower()
+                    if any(x in title for x in ["open", "mở", "chọn", "upload", "select", "tải lên"]):
+                        dialogs.append(hwnd)
+            return True
+        win32gui.EnumWindows(enum_windows_callback, None)
+        return dialogs[0] if dialogs else None
+
+    def inject_files_into_dialog(self, hwnd, file_paths):
+        edit_hwnd = 0
+        def find_edit(h, extra):
+            nonlocal edit_hwnd
+            c_name = win32gui.GetClassName(h)
+            if c_name.lower() == "edit":
+                edit_hwnd = h
+                return False
+            return True
+
+        win32gui.EnumChildWindows(hwnd, find_edit, None)
+        if not edit_hwnd:
+            edit_hwnd = win32gui.FindWindowEx(hwnd, 0, "Edit", None)
+        if not edit_hwnd:
+            return False
+
+        formatted_paths = " ".join(f'"{os.path.abspath(p)}"' for p in file_paths)
+
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(hwnd)
+        time.sleep(0.1)
+
+        win32gui.SendMessage(edit_hwnd, win32con.WM_SETTEXT, 0, formatted_paths)
+        time.sleep(0.1)
+
+        btn_hwnd = 0
+        def find_button(h, extra):
+            nonlocal btn_hwnd
+            c_name = win32gui.GetClassName(h)
+            if c_name.lower() == "button":
+                ctrl_id = win32gui.GetDlgCtrlID(h)
+                if ctrl_id == 1:
+                    btn_hwnd = h
+                    return False
+            return True
+
+        win32gui.EnumChildWindows(hwnd, find_button, None)
+
+        if btn_hwnd:
+            win32gui.PostMessage(hwnd, win32con.WM_COMMAND, 1, btn_hwnd)
+        else:
+            win32gui.PostMessage(edit_hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+            win32gui.PostMessage(edit_hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+
+        return True
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = JMSPopupApp(root)
+    root.mainloop()

@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller build files
+build/
+dist/
+*.spec
+
+# Local data & settings (crucial to ignore!)
+data/
+settings.json
+user_data/
+*.key
+
+# Compiled executables
+*.exe
+
+# Operating system files
+.DS_Store
+Thumbs.db

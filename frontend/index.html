@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JMS Auto-Helper - Đối Trọng Lượng Tự Động</title>
+    <!-- Google Fonts Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Premium Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <i class="fa-solid fa-truck-fast brand-icon"></i>
+                <h2>JMS Helper</h2>
+            </div>
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active" data-tab="dashboard">
+                    <i class="fa-solid fa-chart-line"></i> Bảng điều khiển
+                </a>
+                <a href="#" class="nav-item" data-tab="packages">
+                    <i class="fa-solid fa-boxes-packing"></i> Đơn hàng đã quét
+                </a>
+                <a href="#" class="nav-item" data-tab="settings">
+                    <i class="fa-solid fa-sliders"></i> Cấu hình hệ thống
+                </a>
+            </nav>
+            <div class="status-panel">
+                <h3>Trạng thái kết nối</h3>
+                <div class="status-indicator">
+                    <span class="status-dot disconnected" id="status-browser"></span>
+                    <span>Trình duyệt điều khiển</span>
+                </div>
+                <div class="status-indicator">
+                    <span class="status-dot disconnected" id="status-zalo"></span>
+                    <span>Zalo Web (chat.zalo.me)</span>
+                </div>
+                <div class="status-indicator">
+                    <span class="status-dot disconnected" id="status-jms"></span>
+                    <span>JMS VN (jms.jtexpress.vn)</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="main-header">
+                <div class="header-title">
+                    <h1 id="page-title">Bảng điều khiển</h1>
+                    <p>Hệ thống tự động hóa tải tài liệu Zalo và upload đối trọng lượng JMS</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-outline" id="btn-launch-popup" style="background: linear-gradient(135deg, #a6e3a1, #89b4fa); color: #11111b; font-weight: bold; border: none;">
+                        <i class="fa-solid fa-window-restore"></i> Mở Popup Desktop (Python)
+                    </button>
+                    <button class="btn btn-primary" id="btn-start-browser">
+                        <i class="fa-solid fa-chrome"></i> Mở trình duyệt Chrome
+                    </button>
+                    <button class="btn btn-danger hidden" id="btn-close-browser">
+                        <i class="fa-solid fa-circle-xmark"></i> Đóng trình duyệt
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard Tab -->
+            <section class="tab-content" id="tab-dashboard">
+                <div class="welcome-banner" style="background: url('team_chibi.png') no-repeat center right; background-size: cover; border-radius: 20px; padding: 40px; margin-bottom: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); border: 1px solid #e1e4e8; display: flex; align-items: center; position: relative; overflow: hidden; min-height: 200px;">
+                    <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(to right, rgba(255,255,255,1) 20%, rgba(255,255,255,0.7) 50%, rgba(255,255,255,0) 100%); z-index: 1;"></div>
+                    <div style="position: relative; z-index: 2; max-width: 60%;">
+                        <h2 style="color: #e61b23; font-size: 28px; margin-bottom: 10px; font-weight: 800; text-transform: uppercase;">Xin chào, J&T Express Team!</h2>
+                        <p style="color: #2d3436; font-size: 15px; line-height: 1.6;">Chào mừng bạn đến với hệ thống tự động hóa xử lý dữ liệu và đối trọng lượng JMS. Chúc toàn đội một ngày làm việc bùng nổ, năng suất và ngập tràn niềm vui!</p>
+                    </div>
+                </div>
+                <div class="control-grid">
+                    <!-- Action Card 1: Scan Zalo -->
+                    <div class="control-card glass">
+                        <div class="card-icon gradient-blue">
+                            <i class="fa-solid fa-qrcode"></i>
+                        </div>
+                        <h3>Bước 1: Quét Zalo Web</h3>
+                        <p>Mở nhóm chat "HÀNG QUÁ TRỌNG LƯỢNG" trên Zalo Web. Bạn có thể tự động cuộn lên để tải thêm tin nhắn cũ (từ ngày hôm qua), sau đó bấm đồng bộ.</p>
+                        <div class="scroll-control" style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                            <select id="scroll-times" class="input-search" style="flex: 1; padding: 10px;">
+                                <option value="5">Cuộn 5 lần (~50 đơn)</option>
+                                <option value="15" selected>Cuộn 15 lần (~150 đơn)</option>
+                                <option value="30">Cuộn 30 lần (~300 đơn)</option>
+                                <option value="50">Cuộn 50 lần (~500 đơn)</option>
+                            </select>
+                            <button class="btn btn-outline" id="btn-scroll-zalo" title="Tự động cuộn lên để tải tin nhắn cũ" style="white-space: nowrap;">
+                                <i class="fa-solid fa-arrows-up-to-line"></i> Cuộn tải
+                            </button>
+                        </div>
+                        <button class="btn btn-gradient btn-full" id="btn-scan-zalo">
+                            <i class="fa-solid fa-rotate"></i> Đồng bộ tin nhắn Zalo
+                        </button>
+                        <div class="direction-control" style="display: flex; gap: 8px; align-items: center; width: 100%; margin-top: 10px;">
+                            <span style="font-size: 14px; font-weight: 500; white-space: nowrap; color: var(--text-main);">Hướng quét:</span>
+                            <select id="scan-direction" class="input-search" style="flex: 1; padding: 10px;">
+                                <option value="down">Quét xuôi (Từ tin ghim xuống)</option>
+                                <option value="up" selected>Quét ngược (Từ tin mới nhất lên)</option>
+                            </select>
+                        </div>
+                        <div class="start-tracking-control" style="display: flex; gap: 8px; align-items: center; width: 100%; margin-top: 10px;">
+                            <span style="font-size: 14px; font-weight: 500; white-space: nowrap; color: var(--text-muted);">Mốc quét tiếp:</span>
+                            <input type="text" id="scan-start-tracking" class="input-search" placeholder="Mã vận đơn mốc (12 số)..." style="flex: 1; padding: 10px;">
+                        </div>
+                        <button class="btn btn-gradient btn-full" id="btn-scan-download-5in1" style="background: linear-gradient(135deg, #a6e3a1, #f9e2af); color: #11111b; margin-top: 10px;">
+                            <i class="fa-solid fa-bolt"></i> Quét & Tải tự động (5-in-1)
+                        </button>
+                        <button class="btn btn-full" id="btn-stop-scan" style="background: linear-gradient(135deg, #ff6b6b, #ee5253); color: white; margin-top: 10px; font-weight: bold; border: none; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                            <i class="fa-solid fa-circle-stop"></i> Dừng quét khẩn cấp (Stop)
+                        </button>
+                    </div>
+
+                    <!-- Action Card 1.5: Custom Advanced Scan Anchors -->
+                    <div class="control-card glass">
+                        <div class="card-icon gradient-orange" style="background: linear-gradient(135deg, #f0932b, #ff7979); box-shadow: 0 0 15px rgba(240, 147, 43, 0.3);">
+                            <i class="fa-solid fa-crosshairs"></i>
+                        </div>
+                        <h3>Quét theo mã mốc (Nâng cao)</h3>
+                        <p>Nhập mã vận đơn làm mốc cho từng trường hợp. Hệ thống sẽ tự tìm mã và quét tiếp tục (dừng lại khi gặp tin nhắn đã thích/react).</p>
+                        
+                        <!-- Form TH1: Quét xuôi -->
+                        <div class="custom-scan-group" style="display: flex; flex-direction: column; gap: 8px; width: 100%; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; margin-bottom: 12px;">
+                            <label style="font-size: 13px; font-weight: 600; color: var(--text-main);">TH1: Quét xuôi (Từ trên xuống)</label>
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" class="input-search" id="custom-scan-tracking-down" placeholder="Mã mốc quét xuôi (12 số)..." style="flex: 1;">
+                                <button class="btn btn-outline" id="btn-custom-scan-down" title="Quét từ mã mốc xuống dưới" style="white-space: nowrap; font-size: 13px; font-weight: bold; border-color: rgba(255,255,255,0.15);">
+                                    <i class="fa-solid fa-arrow-down"></i> Chạy TH1
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Form TH2: Quét ngược -->
+                        <div class="custom-scan-group" style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
+                            <label style="font-size: 13px; font-weight: 600; color: var(--text-main);">TH2: Quét ngược (Từ dưới lên)</label>
+                            <div style="display: flex; gap: 8px;">
+                                <input type="text" class="input-search" id="custom-scan-tracking-up" placeholder="Mã mốc quét ngược (12 số)..." style="flex: 1;">
+                                <button class="btn btn-outline" id="btn-custom-scan-up" title="Quét từ mã mốc lên trên" style="white-space: nowrap; font-size: 13px; font-weight: bold; border-color: rgba(255,255,255,0.15);">
+                                    <i class="fa-solid fa-arrow-up"></i> Chạy TH2
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Action Card 2: Bulk Process -->
+                    <div class="control-card glass">
+                        <div class="card-icon gradient-purple">
+                            <i class="fa-solid fa-upload"></i>
+                        </div>
+                        <h3>Bước 2: Xử lý hàng loạt</h3>
+                        <p>Hệ thống sẽ tự động tải các tệp đính kèm về máy theo từng thư mục mã vận đơn và tự động tải lên hệ thống JMS VN tương ứng.</p>
+                        <div class="button-group">
+                            <button class="btn btn-outline" id="btn-download-all" title="Tải tất cả ảnh & video về máy">
+                                <i class="fa-solid fa-download"></i> Tải tất cả
+                            </button>
+                            <button class="btn btn-outline" id="btn-open-folder" title="Mở thư mục chứa ảnh & video trên máy tính">
+                                <i class="fa-solid fa-folder-open"></i> Mở thư mục lưu
+                            </button>
+                            <button class="btn btn-gradient" id="btn-upload-all" title="Bắt đầu tự động điền cân nặng và upload minh chứng">
+                                <i class="fa-solid fa-play"></i> Chạy Auto JMS
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Action Card 3: Manual Clipboard Paste (Zalo PC Support) -->
+                    <div class="control-card glass">
+                        <div class="card-icon gradient-orange">
+                            <i class="fa-solid fa-paste"></i>
+                        </div>
+                        <h3>Nhập nhanh từ Zalo PC (Đơn cũ)</h3>
+                        <p>Dành cho đơn cũ không hiển thị trên Zalo Web. Bạn hãy điền mã đơn rồi Copy ảnh/video từ Zalo PC rồi dán (Ctrl+V) vào ô dưới đây.</p>
+                        <div class="manual-inputs">
+                            <input type="text" class="input-search" id="manual-tracking" placeholder="Mã vận đơn (12 số)...">
+                            <input type="number" step="0.01" class="input-search" id="manual-weight" placeholder="Cân nặng (kg)..." style="margin-top: 8px;">
+                        </div>
+                        <div class="paste-zone" id="paste-zone" tabindex="0">
+                            <i class="fa-solid fa-file-import"></i>
+                            <span>Click vào đây rồi nhấn <strong>Ctrl + V</strong> để dán ảnh/video</span>
+                            <div class="paste-preview" id="paste-preview"></div>
+                        </div>
+                        <button class="btn btn-primary btn-full" id="btn-save-manual" disabled>
+                            <i class="fa-solid fa-save"></i> Tạo Thư Mục & Thêm Vào Danh Sách
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Live Logs Console -->
+                <div class="console-panel glass">
+                    <div class="console-header">
+                        <h4><i class="fa-solid fa-terminal"></i> Nhật ký hoạt động (Logs)</h4>
+                        <button class="btn-text" id="btn-clear-logs">Xóa</button>
+                    </div>
+                    <div class="console-body" id="console-logs">
+                        <div class="log-line system">Hệ thống JMS Helper đã sẵn sàng. Hãy bấm "Mở trình duyệt Chrome" để bắt đầu...</div>
+                    </div>
+                </div>
+
+                <!-- Recent Scans Table Summary -->
+                <div class="table-container glass">
+                    <div class="table-header">
+                        <h4>Danh sách đơn mới quét gần đây</h4>
+                        <span class="badge" id="scanned-count">0 đơn hàng</span>
+                    </div>
+                    <div class="table-scroll">
+                        <table class="data-table" id="table-summary">
+                            <thead>
+                                <tr>
+                                    <th style="width: 80px; text-align: center;">Đã copy</th>
+                                    <th>STT / Thư mục</th>
+                                    <th>Mã vận đơn</th>
+                                    <th>Cân nặng (kg)</th>
+                                    <th>Tệp đính kèm (Ảnh + Video)</th>
+                                    <th>Trạng thái dữ liệu</th>
+                                    <th>Trạng thái JMS</th>
+                                    <th>Thao tác</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="empty-row">
+                                    <td colspan="8">Chưa có đơn hàng nào được quét. Vui lòng bấm "Đồng bộ tin nhắn Zalo".</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Packages Tab -->
+            <section class="tab-content hidden" id="tab-packages">
+                <div class="table-container glass full-height">
+                    <div class="table-header">
+                        <h4>Quản lý tất cả đơn hàng đã quét</h4>
+                        <div class="filter-bar">
+                            <input type="text" class="input-search" id="search-pkg" placeholder="Tìm mã vận đơn...">
+                        </div>
+                    </div>
+                    <div class="table-scroll">
+                        <table class="data-table" id="table-packages-all">
+                            <thead>
+                                <tr>
+                                    <th style="width: 80px; text-align: center;">Đã copy</th>
+                                    <th>STT / Thư mục</th>
+                                    <th>Mã vận đơn</th>
+                                    <th>Cân nặng (kg)</th>
+                                    <th>Ảnh đính kèm</th>
+                                    <th>Video đính kèm</th>
+                                    <th>Trạng thái máy</th>
+                                    <th>Trạng thái JMS</th>
+                                    <th>Hành động</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr class="empty-row">
+                                    <td colspan="9">Không tìm thấy đơn hàng nào.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pagination-controls" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; border-top: 1px solid rgba(255, 255, 255, 0.08); background: rgba(30, 41, 59, 0.4); border-radius: 0 0 16px 16px;">
+                        <div class="pagination-left" style="color: #94a3b8; font-size: 13px;">
+                            Hiển thị 
+                            <select id="page-size" style="background: rgba(15, 23, 42, 0.6); color: #f8fafc; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px 8px; margin: 0 6px; outline: none; cursor: pointer;">
+                                <option value="20">20</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                                <option value="200">200</option>
+                            </select>
+                            dòng. Tổng số: <strong id="total-count" style="color: #ef4444;">0</strong> đơn.
+                        </div>
+                        <div class="pagination-right" style="display: flex; gap: 12px; align-items: center;">
+                            <button class="btn btn-outline" id="btn-prev-page" style="padding: 6px 12px; font-size: 13px; font-weight: bold; border-color: rgba(255,255,255,0.15);" disabled><i class="fa-solid fa-chevron-left"></i> Trước</button>
+                            <span id="page-info" style="color: #f8fafc; font-size: 13px; font-weight: bold; min-width: 90px; text-align: center;">Trang 1 / 1</span>
+                            <button class="btn btn-outline" id="btn-next-page" style="padding: 6px 12px; font-size: 13px; font-weight: bold; border-color: rgba(255,255,255,0.15);" disabled>Sau <i class="fa-solid fa-chevron-right"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Settings Tab -->
+            <section class="tab-content hidden" id="tab-settings">
+                <div class="settings-container glass">
+                    <h3>Cấu hình XPath / Selector cho JMS VN</h3>
+                    <p class="settings-desc">Nếu hệ thống JMS cập nhật giao diện hoặc nút bấm, bạn có thể điều chỉnh lại các thẻ selector ở đây để hệ thống tự nhận dạng mà không cần sửa code.</p>
+                    
+                    <form id="settings-form">
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="sel-search-input">Thẻ nhập mã vận đơn (Search Input)</label>
+                                <input type="text" id="sel-search-input" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-search-btn">Nút bấm Tìm kiếm (Search Button)</label>
+                                <input type="text" id="sel-search-btn" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-edit-btn">Nút Nhập liệu hàng (Edit Icon / Pencil)</label>
+                                <input type="text" id="sel-edit-btn" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-weight-input">Thẻ nhập cân nặng mới (Weight Input)</label>
+                                <input type="text" id="sel-weight-input" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-upload-btn">Khung kéo thả/Chọn file upload (Upload Box)</label>
+                                <input type="text" id="sel-upload-btn" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-confirm-btn">Nút bấm Xác nhận / Lưu trong hộp thoại (Confirm Button)</label>
+                                <input type="text" id="sel-confirm-btn" class="form-input">
+                            </div>
+                        </div>
+                        
+                        <h3 style="margin-top: 30px;">Cấu hình DOM Selector cho Zalo Web</h3>
+                        <p class="settings-desc">Nếu Zalo cập nhật giao diện (đổi class), bạn cập nhật các class/thẻ ở đây để bộ quét hoạt động tiếp.</p>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="sel-zalo-chat-item">Thẻ chứa tin nhắn (Chat Item)</label>
+                                <input type="text" id="sel-zalo-chat-item" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-zalo-scroll">Khung cuộn tin nhắn (Scroll Container)</label>
+                                <input type="text" id="sel-zalo-scroll" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-zalo-search">Thẻ Sidebar Tìm kiếm (Search Inchat)</label>
+                                <input type="text" id="sel-zalo-search" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-zalo-react">Khoảng trống thả tim (Reaction Space)</label>
+                                <input type="text" id="sel-zalo-react" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-zalo-conv">Thẻ chat nhóm ngoài lề (Conv Item)</label>
+                                <input type="text" id="sel-zalo-conv" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label for="sel-zalo-pinned">Khung tin ghim (Pinned Banner)</label>
+                                <input type="text" id="sel-zalo-pinned" class="form-input">
+                            </div>
+                        </div>
+
+                        <h3 style="margin-top: 30px;">Cấu hình OCR để tự động đối chiếu mã vận đơn trên ảnh</h3>
+                        <p class="settings-desc">Hệ thống sẽ tự động quét văn bản trên ảnh để kiểm tra xem có đúng mã vận đơn hay không trước khi lưu thư mục.</p>
+                        <div class="form-grid">
+                            <div class="form-group" style="grid-column: span 2; display: flex; align-items: center; gap: 10px;">
+                                <input type="checkbox" id="sel-enable-ocr" class="form-checkbox" style="width: 20px; height: 20px; cursor: pointer;">
+                                <label for="sel-enable-ocr" style="font-weight: 600; cursor: pointer;">Kích hoạt tính năng kiểm tra mã vận đơn bằng OCR trên ảnh</label>
+                            </div>
+                            <div class="form-group" style="grid-column: span 2;">
+                                <label for="sel-ocr-api-key">API Key OCR.space (Hỗ trợ key miễn phí: helloworld)</label>
+                                <input type="text" id="sel-ocr-api-key" class="form-input" placeholder="Nhập API Key OCR.space của bạn...">
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-outline" id="btn-reset-settings">Khôi phục mặc định</button>
+                            <button type="submit" class="btn btn-primary">Lưu cấu hình</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Notification Toast -->
+    <div class="toast" id="toast">
+        <i class="fa-solid fa-circle-check toast-icon"></i>
+        <span class="toast-message">Đã lưu cấu hình thành công!</span>
+    </div>
+
+    <!-- Script loading -->
+    <script src="app.js?v=20260613_v1"></script>
+</body>
+</html>

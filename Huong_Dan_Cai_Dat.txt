@@ -1,0 +1,29 @@
+============================================================
+HƯỚNG DẪN CÀI ĐẶT VÀ SỬ DỤNG JMS HELPER TRÊN MÁY MỚI
+============================================================
+
+1. CÀI ĐẶT TRÊN MÁY MỚI (VÍ DỤ Ổ D):
+   - Giải nén toàn bộ tệp tin trong file ZIP này vào một thư mục trên ổ D (Ví dụ: D:\JMS_Helper).
+   - Máy tính mới chỉ cần cài đặt sẵn trình duyệt Google Chrome bản chính thức mới nhất.
+
+2. CÁCH KHỞI CHẠY PHẦN MỀM:
+   - Chạy trực tiếp file 'JMS_Helper.exe' (Nhấp đúp chuột).
+   - Sau khi chạy, một cửa sổ console và cửa sổ Popup nhỏ của ứng dụng sẽ xuất hiện.
+   - Trình duyệt mặc định trên máy sẽ tự động mở trang quản trị tại: http://localhost:5050
+
+3. HƯỚNG DẪN SỬ DỤNG NHANH:
+   - Bước 1: Trên giao diện web, nhấp vào nút "Mở trình duyệt Chrome" ở góc trên bên phải.
+   - Bước 2: Một cửa sổ trình duyệt Chrome điều khiển đặc biệt sẽ mở ra, tự động tải Zalo Web (chat.zalo.me) và JMS VN (jms.jtexpress.vn).
+   - Bước 3: Bạn tiến hành đăng nhập tài khoản Zalo và tài khoản JMS trên cửa sổ Chrome vừa hiện lên.
+   - Bước 4: Sau khi đăng nhập thành công, bạn có thể thực hiện quét tin nhắn Zalo, tải ảnh/video minh chứng và tự động điền đối trọng lượng lên hệ thống JMS.
+
+4. XỬ LÝ LỖI KHÔNG MỞ ĐƯỢC CHROME:
+   - Phiên bản cập nhật này đã tích hợp bộ tự động dọn dẹp lỗi. Nếu bạn gặp lỗi không mở được Chrome (lỗi khóa profile hoặc tiến trình ngầm bị treo), bạn chỉ cần tắt hẳn phần mềm 'JMS_Helper.exe' đi và mở lại, phần mềm sẽ tự quét dọn và sửa lỗi hoàn toàn tự động.
+
+5. NGUỒN PHÁT TRIỂN (DÀNH CHO LẬP TRÌNH VIÊN):
+   - Thư mục giải nén chứa đầy đủ mã nguồn Python (thư mục backend, frontend, main.py, popup_tool.py...) và script build 'build.bat'.
+   - Nếu muốn chạy từ mã nguồn Python:
+     + Cài đặt Python 3.10 trở lên.
+     + Cài đặt các thư viện cần thiết: pip install playwright pyinstaller pywin32
+     + Chạy lệnh khởi tạo playwright: playwright install
+     + Khởi chạy phần mềm bằng lệnh: python main.py
