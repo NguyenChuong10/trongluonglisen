@@ -420,7 +420,6 @@ def verify_and_enforce_license(on_success):
     # 3. Nếu chưa kích hoạt Key, kiểm tra xem còn trong hạn dùng thử 30 ngày hay không
     is_in_trial, remaining_days, trial_msg = check_trial_status()
     if is_in_trial:
-        print(f"[Dùng thử] {trial_msg}")
         on_success()
         return
 
