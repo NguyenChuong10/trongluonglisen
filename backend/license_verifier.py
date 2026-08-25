@@ -5,11 +5,12 @@ import hmac
 import hashlib
 import winreg
 import time
+import base64
 from datetime import datetime
-import customtkinter as ctk
-import tkinter as tk
 
 SECRET_SALT = "JMS_Helper_Secret_Key_2026_@!"
+REG_PATH = r"Software\JMS_Helper"
+REG_KEY = "TrialStart"
 
 # Setup pathing
 if hasattr(sys, '_MEIPASS'):
@@ -19,6 +20,11 @@ else:
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
 LICENSE_FILE = os.path.join(DATA_DIR, "license.key")
+TRIAL_FILE = os.path.join(DATA_DIR, "trial.dat")
+
+# Setup Tkinter components dynamically
+import customtkinter as ctk
+import tkinter as tk
 
 def get_machine_id():
     """Lấy mã định danh phần cứng duy nhất của máy tính chạy Windows."""
@@ -96,7 +102,6 @@ def check_time_tampering():
 
 def check_license_saved():
     """Kiểm tra key đã lưu sẵn trong file."""
-    # Trước tiên kiểm tra xem có hack thời gian không
     if check_time_tampering():
         return False
         
@@ -110,6 +115,100 @@ def check_license_saved():
     except Exception:
         return False
 
+# ==========================================
+# CÁC HÀM XỬ LÝ HẠN DÙNG THỬ (AUTO-TRIAL)
+# ==========================================
+
+def get_registry_trial_date():
+    """Đọc ngày bắt đầu dùng thử từ Windows Registry."""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH, 0, winreg.KEY_READ)
+        value, _ = winreg.QueryValueEx(key, REG_KEY)
+        winreg.CloseKey(key)
+        decoded = base64.b64decode(value.encode()).decode()
+        return datetime.strptime(decoded, "%Y%m%d").date()
+    except Exception:
+        return None
+
+def set_registry_trial_date(date_val):
+    """Ghi ngày bắt đầu dùng thử vào Windows Registry."""
+    try:
+        key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_PATH)
+        encoded = base64.b64encode(date_val.strftime("%Y%m%d").encode()).decode()
+        winreg.SetValueEx(key, REG_KEY, 0, winreg.REG_SZ, encoded)
+        winreg.CloseKey(key)
+    except Exception:
+        pass
+
+def get_file_trial_date():
+    """Đọc ngày bắt đầu dùng thử từ file trial.dat trong thư mục data."""
+    if not os.path.exists(TRIAL_FILE):
+        return None
+    try:
+        with open(TRIAL_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        decoded = base64.b64decode(content.encode()).decode()
+        return datetime.strptime(decoded, "%Y%m%d").date()
+    except Exception:
+        return None
+
+def set_file_trial_date(date_val):
+    """Ghi ngày bắt đầu dùng thử vào file trial.dat."""
+    try:
+        os.makedirs(os.path.dirname(TRIAL_FILE), exist_ok=True)
+        encoded = base64.b64encode(date_val.strftime("%Y%m%d").encode()).decode()
+        with open(TRIAL_FILE, "w", encoding="utf-8") as f:
+            f.write(encoded)
+    except Exception:
+        pass
+
+def check_trial_status():
+    """
+    Kiểm tra trạng thái dùng thử 30 ngày.
+    Trả về (is_in_trial, remaining_days, message)
+    """
+    if check_time_tampering():
+        return False, 0, "Phát hiện thời gian hệ thống không chính xác (nghi vấn lùi giờ)."
+
+    reg_date = get_registry_trial_date()
+    file_date = get_file_trial_date()
+
+    if not reg_date and not file_date:
+        # Lần đầu tiên chạy app: Tạo ngày bắt đầu dùng thử là hôm nay
+        today = datetime.now().date()
+        set_registry_trial_date(today)
+        set_file_trial_date(today)
+        return True, 30, "Bắt đầu dùng thử 30 ngày."
+
+    # Đồng bộ hóa ngày nếu một trong hai bên bị xóa/tamper
+    if reg_date and not file_date:
+        set_file_trial_date(reg_date)
+        start_date = reg_date
+    elif file_date and not reg_date:
+        set_registry_trial_date(file_date)
+        start_date = file_date
+    else:
+        # Nếu cả 2 đều tồn tại, lấy ngày cũ nhất để tránh reset
+        start_date = min(reg_date, file_date)
+        set_registry_trial_date(start_date)
+        set_file_trial_date(start_date)
+
+    today = datetime.now().date()
+    elapsed = (today - start_date).days
+
+    if elapsed < 0:
+        return False, 0, "Thời gian hệ thống không khớp với ngày bắt đầu dùng thử."
+
+    remaining = 30 - elapsed
+    if remaining >= 0:
+        return True, remaining, f"Hạn dùng thử còn lại: {remaining} ngày."
+    else:
+        return False, 0, "Đã hết thời hạn dùng thử 30 ngày."
+
+# ==========================================
+# GIAO DIỆN KÍCH HOẠT (CUSTOMTKINTER)
+# ==========================================
+
 class ActivationDialog(ctk.CTk):
     def __init__(self, on_success_callback=None):
         super().__init__()
@@ -119,42 +218,35 @@ class ActivationDialog(ctk.CTk):
         self.title("Kích hoạt bản quyền - JMS Helper")
         self.geometry("520x360")
         self.resizable(False, False)
-        
-        # Luôn hiển thị trên cùng để người dùng không bỏ qua
         self.attributes("-topmost", True)
         
-        # Giao diện tối
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
         
         self.setup_ui()
-        
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         
     def setup_ui(self):
-        # Frame chính
-        main_frame = ctk.CTkFrame(self, fg_color="#1e293b") # Slate 800
+        main_frame = ctk.CTkFrame(self, fg_color="#1e293b")
         main_frame.pack(fill="both", expand=True, padx=15, pady=15)
         
-        # Tiêu đề
         title_label = ctk.CTkLabel(
             main_frame, 
-            text="JMS HELPER - KÍCH HOẠT BẢN QUYỀN", 
+            text="JMS HELPER - ĐĂNG KÝ BẢN QUYỀN", 
             font=("Segoe UI", 16, "bold"), 
-            text_color="#ef4444" # Đỏ J&T
+            text_color="#ef4444"
         )
         title_label.pack(pady=(15, 5))
         
         sub_label = ctk.CTkLabel(
             main_frame,
-            text="Vui lòng gửi Mã thiết bị sau cho Admin để nhận mã kích hoạt.",
+            text="Phần mềm chưa được kích hoạt hoặc đã hết 30 ngày dùng thử.",
             font=("Segoe UI", 11),
-            text_color="#94a3b8" # Slate 400
+            text_color="#94a3b8"
         )
         sub_label.pack(pady=(0, 15))
         
-        # Frame hiển thị Machine ID
-        mid_frame = ctk.CTkFrame(main_frame, fg_color="#0f172a", height=50) # Slate 900
+        mid_frame = ctk.CTkFrame(main_frame, fg_color="#0f172a", height=50)
         mid_frame.pack(fill="x", padx=20, pady=5)
         
         machine_id = get_machine_id()
@@ -182,7 +274,6 @@ class ActivationDialog(ctk.CTk):
         )
         copy_btn.pack(side="right", padx=10, pady=10)
         
-        # Ô nhập key
         key_label = ctk.CTkLabel(
             main_frame,
             text="Nhập mã kích hoạt (License Key):",
@@ -201,7 +292,6 @@ class ActivationDialog(ctk.CTk):
         )
         self.key_textbox.pack(fill="x", padx=20, pady=5)
         
-        # Label thông báo lỗi/thành công
         self.status_label = ctk.CTkLabel(
             main_frame,
             text="",
@@ -210,7 +300,6 @@ class ActivationDialog(ctk.CTk):
         )
         self.status_label.pack(pady=5)
         
-        # Nút Kích hoạt & Thoát
         btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         btn_frame.pack(pady=(5, 10))
         
@@ -243,7 +332,6 @@ class ActivationDialog(ctk.CTk):
         self.clipboard_append(self.id_entry.get())
         self.update()
         
-        # Hiển thị thông báo tạm thời
         old_status = self.status_label.cget("text")
         old_color = self.status_label.cget("text_color")
         self.status_label.configure(text="Đã sao chép mã thiết bị vào bộ nhớ đệm!", text_color="#10b981")
@@ -255,13 +343,10 @@ class ActivationDialog(ctk.CTk):
         
         if is_valid:
             self.status_label.configure(text=msg, text_color="#10b981")
-            # Tạo thư mục data nếu chưa có
             os.makedirs(DATA_DIR, exist_ok=True)
             with open(LICENSE_FILE, "w", encoding="utf-8") as f:
                 f.write(key)
             self.activated = True
-            
-            # Đóng cửa sổ và chạy callback tiếp tục ứng dụng
             self.after(1500, self.success_exit)
         else:
             self.status_label.configure(text=msg, text_color="#ef4444")
@@ -276,18 +361,16 @@ class ActivationDialog(ctk.CTk):
         sys.exit(0)
 
 def prompt_activation_cli():
-    """Hộp thoại kích hoạt cho môi trường không có giao diện Tkinter."""
+    """Hộp thoại kích hoạt cho môi trường CLI (không hỗ trợ GUI)."""
     print("\n" + "="*60)
-    print("ỨNG DỤNG CHƯA ĐƯỢC KÍCH HOẠT HOẶC ĐÃ HẾT HẠN BẢN QUYỀN")
+    print("ỨNG DỤNG CHƯA ĐƯỢC KÍCH HOẠT HOẶC ĐÃ HẾT HẠN DÙNG THỬ 30 NGÀY")
     print("="*60)
     print(f"Mã thiết bị của bạn: {get_machine_id()}")
-    print("Vui lòng sao chép mã trên gửi cho Admin để nhận khóa kích hoạt.")
+    print("Vui lòng gửi mã trên cho Admin để nhận khóa kích hoạt.")
     print("="*60 + "\n")
     
-    # Kiểm tra xem có chỉnh sửa ngày hệ thống không
     if check_time_tampering():
         print("[Lỗi] Phát hiện thời gian hệ thống không chính xác (nghi vấn lùi giờ).")
-        print("Vui lòng chỉnh lại giờ hệ thống đúng chuẩn và mở lại ứng dụng.")
         sys.exit(0)
         
     try:
@@ -305,21 +388,22 @@ def prompt_activation_cli():
         print("\nĐã hủy kích hoạt.")
         sys.exit(0)
 
+# ==========================================
+# HÀM ĐIỀU PHỐI CHÍNH (ĐƯỢC GỌI TỪ MAIN.PY)
+# ==========================================
+
 def verify_and_enforce_license(on_success):
     """
-    Hàm gọi từ main.py để bắt buộc check bản quyền.
-    Nếu hợp lệ thì chạy tiếp hàm on_success.
-    Nếu không hợp lệ thì mở giao diện kích hoạt hoặc CLI kích hoạt.
+    Hàm gọi từ main.py để kiểm soát quyền khởi chạy ứng dụng.
+    Kiểm tra lần lượt: Chống lùi giờ -> Key lưu sẵn -> Hạn dùng thử.
     """
-    # 1. Phát hiện gian lận thời gian hệ thống trước
+    # 1. Phát hiện lùi giờ hệ thống
     if check_time_tampering():
         msg = "Phát hiện thời gian hệ thống bị lùi ngược! Vui lòng đồng bộ lại giờ chuẩn."
         print(f"\n[LỖI BẢN QUYỀN] {msg}\n")
-        # Nếu có giao diện CTk, hiện cảnh báo và tắt
         try:
             root = ctk.CTk()
             root.withdraw()
-            # Dùng tkinter chuẩn để báo lỗi nếu CTk lỗi
             from tkinter import messagebox
             messagebox.showerror("Lỗi bản quyền", msg)
             root.destroy()
@@ -327,14 +411,23 @@ def verify_and_enforce_license(on_success):
             pass
         sys.exit(0)
         
-    # 2. Kiểm tra key đã lưu sẵn
+    # 2. Kiểm tra nếu đã kích hoạt Key bản quyền thành công trước đó
     if check_license_saved():
+        print("[Bản quyền] Đã kích hoạt bản quyền chính thức.")
         on_success()
-    else:
-        # Nếu chưa kích hoạt, mở hộp thoại
-        try:
-            dialog = ActivationDialog(on_success_callback=on_success)
-            dialog.mainloop()
-        except Exception as e:
-            # Fallback về CLI nếu môi trường không cho phép mở cửa sổ (headless)
-            prompt_activation_cli()
+        return
+
+    # 3. Nếu chưa kích hoạt Key, kiểm tra xem còn trong hạn dùng thử 30 ngày hay không
+    is_in_trial, remaining_days, trial_msg = check_trial_status()
+    if is_in_trial:
+        print(f"[Dùng thử] {trial_msg}")
+        on_success()
+        return
+
+    # 4. Hết hạn dùng thử và chưa kích hoạt -> Bắt buộc mở bảng kích hoạt
+    print(f"[Yêu cầu kích hoạt] {trial_msg}")
+    try:
+        dialog = ActivationDialog(on_success_callback=on_success)
+        dialog.mainloop()
+    except Exception as e:
+        prompt_activation_cli()
