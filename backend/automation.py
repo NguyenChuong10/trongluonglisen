@@ -2804,13 +2804,13 @@ class JMSAutomation:
             # --- LAYER 1: Attempt Grouped Media Bulk ZIP Download ---
             try:
                 # Hover over the media bubble to trigger action buttons (like bulk download / More button)
-                media_bubble_locator = self.zalo_page.locator('.zalo-video-temp-target .message-content-render, .zalo-video-temp-target .message-frame, .zalo-video-temp-target .message-non-frame').first
-                await media_bubble_locator.hover(timeout=3000)
+                media_bubble_locator = self.zalo_page.locator('.zalo-video-temp-target .message-content-render, .zalo-video-temp-target .message-frame, .zalo-video-temp-target .message-non-frame, .zalo-video-temp-target').first
+                await media_bubble_locator.hover(timeout=5000)
                 await asyncio.sleep(0.2)
                 
-                # Check for "More" button inside the media bubble
+                # Check for "More" button inside the media bubble (with 1.5s polling)
                 more_eval = await self.zalo_page.evaluate("""
-                    () => {
+                    async () => {
                         const videoEl = document.querySelector('.zalo-video-temp-target');
                         if (!videoEl) return { success: false, error: 'Không tìm thấy media bubble.' };
                         
@@ -2839,10 +2839,13 @@ class JMSAutomation:
                             return null;
                         };
                         
-                        const moreBtn = findMoreBtn();
-                        if (moreBtn) {
-                            moreBtn.setAttribute('data-temp-more-click', 'true');
-                            return { success: true };
+                        for (let attempt = 0; attempt < 15; attempt++) {
+                            const moreBtn = findMoreBtn();
+                            if (moreBtn) {
+                                moreBtn.setAttribute('data-temp-more-click', 'true');
+                                return { success: true };
+                            }
+                            await new Promise(resolve => setTimeout(resolve, 100));
                         }
                         return { success: false, error: 'Không tìm thấy nút Thêm (...) trong bong bóng tin nhắn.' };
                     }
@@ -2850,35 +2853,41 @@ class JMSAutomation:
                 
                 if more_eval and more_eval.get("success"):
                     print("Nhấp vào nút Thêm (...)")
-                    await self.zalo_page.click('.zalo-video-temp-target [data-temp-more-click="true"]', timeout=3000)
+                    await self.zalo_page.click('.zalo-video-temp-target [data-temp-more-click="true"]', timeout=5000)
                     await asyncio.sleep(0.2)
                     
-                    # Search context menu for "Lưu X ảnh/video về máy" or similar
+                    # Search context menu for "Lưu X ảnh/video về máy" or similar (with 1.5s polling)
                     menu_eval = await self.zalo_page.evaluate("""
-                        () => {
-                            const items = Array.from(document.querySelectorAll('div, li, span, a'));
-                            const downloadItem = items.find(el => {
-                                const text = (el.textContent || '').trim().toLowerCase();
-                                const matches = (text.includes('về máy') && (text.includes('ảnh') || text.includes('video') || text.includes('file'))) ||
-                                                text === 'lưu về máy' || text === 'tải về' || text === 'tải xuống' ||
-                                                text.includes('lưu về máy') || text.includes('tải về') || text.includes('download') || text.includes('save');
-                                if (!matches) return false;
-                                
-                                const rect = el.getBoundingClientRect();
-                                if (rect.width === 0 || rect.height === 0 || rect.left <= 220) return false;
-                                
-                                const childMatches = Array.from(el.querySelectorAll('*')).some(child => {
-                                    const childText = (child.textContent || '').trim().toLowerCase();
-                                    return (childText.includes('về máy') && (childText.includes('ảnh') || childText.includes('video') || childText.includes('file'))) ||
-                                           childText === 'lưu về máy' || childText === 'tải về' || childText === 'tải xuống' ||
-                                           childText.includes('lưu về máy') || childText.includes('tải về') || childText.includes('download') || childText.includes('save');
+                        async () => {
+                            const findDownloadItem = () => {
+                                const items = Array.from(document.querySelectorAll('div, li, span, a'));
+                                return items.find(el => {
+                                    const text = (el.textContent || '').trim().toLowerCase();
+                                    const matches = (text.includes('về máy') && (text.includes('ảnh') || text.includes('video') || text.includes('file'))) ||
+                                                    text === 'lưu về máy' || text === 'tải về' || text === 'tải xuống' ||
+                                                    text.includes('lưu về máy') || text.includes('tải về') || text.includes('download') || text.includes('save');
+                                    if (!matches) return false;
+                                    
+                                    const rect = el.getBoundingClientRect();
+                                    if (rect.width === 0 || rect.height === 0 || rect.left <= 220) return false;
+                                    
+                                    const childMatches = Array.from(el.querySelectorAll('*')).some(child => {
+                                        const childText = (child.textContent || '').trim().toLowerCase();
+                                        return (childText.includes('về máy') && (childText.includes('ảnh') || childText.includes('video') || childText.includes('file'))) ||
+                                               childText === 'lưu về máy' || childText === 'tải về' || childText === 'tải xuống' ||
+                                               childText.includes('lưu về máy') || childText.includes('tải về') || childText.includes('download') || childText.includes('save');
+                                    });
+                                    return !childMatches;
                                 });
-                                return !childMatches;
-                            });
+                            };
                             
-                            if (downloadItem) {
-                                downloadItem.setAttribute('data-temp-menu-download-click', 'true');
-                                return { success: true, text: downloadItem.textContent.trim() };
+                            for (let attempt = 0; attempt < 15; attempt++) {
+                                const downloadItem = findDownloadItem();
+                                if (downloadItem) {
+                                    downloadItem.setAttribute('data-temp-menu-download-click', 'true');
+                                    return { success: true, text: downloadItem.textContent.trim() };
+                                }
+                                await new Promise(resolve => setTimeout(resolve, 100));
                             }
                             return { success: false, error: 'Không tìm thấy tùy chọn Tải/Lưu trong menu.' };
                         }
@@ -2888,7 +2897,7 @@ class JMSAutomation:
                         print(f"Đang click tùy chọn tải về: '{menu_eval['text']}'...")
                         
                         async with self.zalo_page.expect_download(timeout=15000) as download_info:
-                            await self.zalo_page.click('[data-temp-menu-download-click="true"]', timeout=3000)
+                            await self.zalo_page.click('[data-temp-menu-download-click="true"]', timeout=5000)
                         download = await download_info.value
                         
                         temp_zip_path = os.path.join(package_dir, "temp_" + download.suggested_filename)
@@ -3004,8 +3013,25 @@ class JMSAutomation:
                     print(f"Số lượng file media phát hiện trong bong bóng này: {media_count}")
                     
                     if media_count > 0:
-                        # Click the first thumbnail inside the bubble to open Lightbox
-                        await self.zalo_page.locator('.zalo-video-temp-target img, .zalo-video-temp-target video, .zalo-video-temp-target [class*="play"]').first.click(timeout=3000)
+                        # Click the first thumbnail inside the bubble to open Lightbox (with JS fallback if Playwright click times out)
+                        try:
+                            await self.zalo_page.locator('.zalo-video-temp-target img, .zalo-video-temp-target video, .zalo-video-temp-target [class*="play"]').first.click(timeout=5000)
+                        except Exception as e_click:
+                            print(f"[Lightbox] Playwright click failed: {e_click}. Trying JS click fallback...")
+                            clicked_via_js = await self.zalo_page.evaluate("""
+                                () => {
+                                    const bubble = document.querySelector('.zalo-video-temp-target');
+                                    if (!bubble) return false;
+                                    const clickTarget = bubble.querySelector('img, video, [class*="play"]');
+                                    if (clickTarget) {
+                                        clickTarget.click();
+                                        return true;
+                                    }
+                                    return false;
+                                }
+                            """)
+                            if not clicked_via_js:
+                                raise Exception("Không tìm thấy phần tử thumbnail để click mở Lightbox.")
                         await asyncio.sleep(0.4)
                         
                         downloaded_images = []
@@ -3077,23 +3103,54 @@ class JMSAutomation:
                                 
                             seen_srcs.add(media_src)
                             
-                            # Fetch the blob contents via JS
+                            # Fetch the blob contents via JS (with canvas fallback for images)
                             fetch_result = await self.zalo_page.evaluate("""
-                                async (src) => {
+                                async (args) => {
+                                    const src = args.src;
+                                    const isImage = args.isImage;
+                                    
+                                    const getBase64ViaCanvas = () => {
+                                        const imgs = Array.from(document.querySelectorAll('img')).filter(img => img.src === src);
+                                        if (imgs.length > 0) {
+                                            try {
+                                                const img = imgs[0];
+                                                const canvas = document.createElement('canvas');
+                                                canvas.width = img.naturalWidth || img.width;
+                                                canvas.height = img.naturalHeight || img.height;
+                                                const ctx = canvas.getContext('2d');
+                                                ctx.drawImage(img, 0, 0);
+                                                const dataURL = canvas.toDataURL('image/jpeg');
+                                                return { success: true, base64: dataURL.split(',')[1] };
+                                            } catch (err) {
+                                                return { success: false, error: 'Canvas render error: ' + err.message };
+                                            }
+                                        }
+                                        return { success: false, error: 'Image element not found' };
+                                    };
+
                                     try {
                                         const res = await fetch(src);
                                         const blob = await res.blob();
                                         return new Promise((resolve) => {
                                             const reader = new FileReader();
                                             reader.onloadend = () => resolve({ success: true, base64: reader.result.split(',')[1] });
-                                            reader.onerror = () => resolve({ success: false, error: 'Lỗi đọc file blob' });
+                                            reader.onerror = () => {
+                                                if (isImage) {
+                                                    resolve(getBase64ViaCanvas());
+                                                } else {
+                                                    resolve({ success: false, error: 'Lỗi đọc file blob' });
+                                                }
+                                            };
                                             reader.readAsDataURL(blob);
                                         });
                                     } catch(e) {
+                                        if (isImage) {
+                                            return getBase64ViaCanvas();
+                                        }
                                         return { success: false, error: e.message };
                                     }
                                 }
-                            """, media_src)
+                            """, {"src": media_src, "isImage": (media_type != "video")})
                             
                             if fetch_result and fetch_result.get("success"):
                                 base64_data = fetch_result["base64"]
