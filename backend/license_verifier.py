@@ -164,7 +164,7 @@ def set_file_trial_date(date_val):
 
 def check_trial_status():
     """
-    Kiểm tra trạng thái dùng thử 30 ngày.
+    Kiểm tra trạng thái dùng thử 45 ngày.
     Trả về (is_in_trial, remaining_days, message)
     """
     if check_time_tampering():
@@ -178,7 +178,7 @@ def check_trial_status():
         today = datetime.now().date()
         set_registry_trial_date(today)
         set_file_trial_date(today)
-        return True, 30, "Bắt đầu dùng thử 30 ngày."
+        return True, 45, "Bắt đầu dùng thử 45 ngày."
 
     # Đồng bộ hóa ngày nếu một trong hai bên bị xóa/tamper
     if reg_date and not file_date:
@@ -199,11 +199,11 @@ def check_trial_status():
     if elapsed < 0:
         return False, 0, "Thời gian hệ thống không khớp với ngày bắt đầu dùng thử."
 
-    remaining = 30 - elapsed
+    remaining = 45 - elapsed
     if remaining >= 0:
         return True, remaining, f"Hạn dùng thử còn lại: {remaining} ngày."
     else:
-        return False, 0, "Đã hết thời hạn dùng thử 30 ngày."
+        return False, 0, "Đã hết thời hạn dùng thử 45 ngày."
 
 # ==========================================
 # GIAO DIỆN KÍCH HOẠT (CUSTOMTKINTER)
@@ -240,7 +240,7 @@ class ActivationDialog(ctk.CTk):
         
         sub_label = ctk.CTkLabel(
             main_frame,
-            text="Phần mềm chưa được kích hoạt hoặc đã hết 30 ngày dùng thử.",
+            text="Phần mềm chưa được kích hoạt hoặc đã hết 45 ngày dùng thử.",
             font=("Segoe UI", 11),
             text_color="#94a3b8"
         )
@@ -363,7 +363,7 @@ class ActivationDialog(ctk.CTk):
 def prompt_activation_cli():
     """Hộp thoại kích hoạt cho môi trường CLI (không hỗ trợ GUI)."""
     print("\n" + "="*60)
-    print("ỨNG DỤNG CHƯA ĐƯỢC KÍCH HOẠT HOẶC ĐÃ HẾT HẠN DÙNG THỬ 30 NGÀY")
+    print("ỨNG DỤNG CHƯA ĐƯỢC KÍCH HOẠT HOẶC ĐÃ HẾT HẠN DÙNG THỬ 45 NGÀY")
     print("="*60)
     print(f"Mã thiết bị của bạn: {get_machine_id()}")
     print("Vui lòng gửi mã trên cho Admin để nhận khóa kích hoạt.")
@@ -417,7 +417,7 @@ def verify_and_enforce_license(on_success):
         on_success()
         return
 
-    # 3. Nếu chưa kích hoạt Key, kiểm tra xem còn trong hạn dùng thử 30 ngày hay không
+    # 3. Nếu chưa kích hoạt Key, kiểm tra xem còn trong hạn dùng thử 45 ngày hay không
     is_in_trial, remaining_days, trial_msg = check_trial_status()
     if is_in_trial:
         on_success()
