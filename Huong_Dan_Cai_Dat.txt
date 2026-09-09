@@ -24,6 +24,15 @@ HƯỚNG DẪN CÀI ĐẶT VÀ SỬ DỤNG JMS HELPER TRÊN MÁY MỚI
    - Thư mục giải nén chứa đầy đủ mã nguồn Python (thư mục backend, frontend, main.py, popup_tool.py...) và script build 'build.bat'.
    - Nếu muốn chạy từ mã nguồn Python:
      + Cài đặt Python 3.10 trở lên.
-     + Cài đặt các thư viện cần thiết: pip install playwright pyinstaller pywin32
+     + Cài đặt các thư viện cần thiết: pip install playwright pyinstaller pywin32 requests customtkinter
      + Chạy lệnh khởi tạo playwright: playwright install
      + Khởi chạy phần mềm bằng lệnh: python main.py
+
+6. QUẢN LÝ BẢN QUYỀN & CHỐNG CÀI LẠI WIN:
+   - Phần mềm sử dụng Mã phần cứng vĩnh viễn (HWID: Mainboard + BIOS + SSD Serial). Dù cài lại Windows thì mã máy vẫn giữ nguyên.
+   - Tự động dùng thử 30 ngày đầu tiên (âm thầm, không hiện thông báo). Mốc ngày được đồng bộ tự động lên Google Sheet của Admin.
+   - Sau 30 ngày, app tự động khóa lại và yêu cầu nhập License Key.
+   - Để tạo License Key cho khách:
+     + Chạy script: python license_generator.py
+     + Dán Machine ID của khách vào và chọn gói thời hạn (1 tháng, 3 tháng, 1 năm...).
+     + Gửi License Key cho khách nhập vào bảng kích hoạt.

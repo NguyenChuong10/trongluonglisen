@@ -479,37 +479,40 @@ async def run_5in1(automation, progress_callback=None, direction="up", start_tra
             # Step C: Scroll a small amount in specified direction after processing each single bill
             scroll_amount_single = 300
             print(f"[5-in-1] Xử lý xong đơn {trk} → Cuộn {'lên' if direction == 'up' else 'xuống'} {scroll_amount_single}px")
-            await automation.zalo_page.evaluate("""
-                (args) => {
-                    const amt = args.amt;
-                    const dir = args.dir;
-                    const sc = document.querySelector(window.zalo_scroll_container || '.message-view__scroll .transform-gpu') ||
-                           Array.from(document.querySelectorAll('div')).reduce((best, el) => {
-                               const s = window.getComputedStyle(el), r = el.getBoundingClientRect();
-                               if ((s.overflowY==='scroll'||s.overflowY==='auto') && r.height>400 && r.width>400 && el.scrollHeight>el.clientHeight+100) {
-                                   if (!best || el.scrollHeight > best.scrollHeight) return el;
-                               }
-                               return best;
-                           }, null);
-                    if (sc) {
-                        if (dir === 'up') {
-                            if (sc.scrollTop <= 5) {
-                                sc.scrollTop = 15;
-                                sc.dispatchEvent(new Event('scroll', { bubbles: true }));
-                                sc.scrollTop = 0;
+            try:
+                await automation.zalo_page.evaluate("""
+                    (args) => {
+                        const amt = args.amt;
+                        const dir = args.dir;
+                        const sc = document.querySelector(window.zalo_scroll_container || '.message-view__scroll .transform-gpu') ||
+                               Array.from(document.querySelectorAll('div')).reduce((best, el) => {
+                                   const s = window.getComputedStyle(el), r = el.getBoundingClientRect();
+                                   if ((s.overflowY==='scroll'||s.overflowY==='auto') && r.height>400 && r.width>400 && el.scrollHeight>el.clientHeight+100) {
+                                       if (!best || el.scrollHeight > best.scrollHeight) return el;
+                                   }
+                                   return best;
+                               }, null);
+                        if (sc) {
+                            if (dir === 'up') {
+                                if (sc.scrollTop <= 5) {
+                                    sc.scrollTop = 15;
+                                    sc.dispatchEvent(new Event('scroll', { bubbles: true }));
+                                    sc.scrollTop = 0;
+                                } else {
+                                    sc.scrollTop -= amt;
+                                }
                             } else {
-                                sc.scrollTop -= amt;
+                                sc.scrollTop += amt;
                             }
-                        } else {
-                            sc.scrollTop += amt;
+                            sc.dispatchEvent(new Event('scroll', { bubbles: true }));
+                            const delta = dir === 'up' ? -amt : amt;
+                            sc.dispatchEvent(new WheelEvent('wheel', { deltaY: delta, bubbles: true }));
                         }
-                        sc.dispatchEvent(new Event('scroll', { bubbles: true }));
-                        const delta = dir === 'up' ? -amt : amt;
-                        sc.dispatchEvent(new WheelEvent('wheel', { deltaY: delta, bubbles: true }));
                     }
-                }
-            """, {"amt": scroll_amount_single, "dir": direction})
-            await asyncio.sleep(1.0) # Wait for Zalo to lazy-load older messages
+                """, {"amt": scroll_amount_single, "dir": direction})
+                await asyncio.sleep(1.0) # Wait for Zalo to lazy-load older messages
+            except Exception as se:
+                print(f"[5-in-1] Lỗi cuộn sau khi xử lý đơn {trk}: {se}")
 
             # Loop back immediately to check DOM
             continue

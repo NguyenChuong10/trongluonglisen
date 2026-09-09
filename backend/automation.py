@@ -539,11 +539,26 @@ class JMSAutomation:
         self.playwright = await async_playwright().start()
         
         # Launch persistent Chrome context to save login sessions
+        # Stable launch flags without conflicting remote-debugging-port
         self.browser_context = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=USER_DATA_DIR,
             headless=False,
             channel="chrome",
-            args=["--start-maximized", "--remote-debugging-port=9222"],
+            args=[
+                "--start-maximized",
+                "--disable-blink-features=AutomationControlled",
+                "--no-default-browser-check",
+                "--no-first-run",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--disable-features=SiteEngagementService,PreloadMediaEngagementData",
+                "--disable-breakpad",
+                "--disable-crash-reporter",
+                "--disable-component-update",
+                "--disable-domain-reliability",
+            ],
+            ignore_default_args=["--enable-automation"],
             no_viewport=True
         )
         
@@ -553,13 +568,27 @@ class JMSAutomation:
         pages = self.browser_context.pages
         if len(pages) == 0:
             self.zalo_page = await self.browser_context.new_page()
-            await self.zalo_page.goto("https://chat.zalo.me/")
         else:
             self.zalo_page = pages[0]
-            await self.zalo_page.goto("https://chat.zalo.me/")
 
-        self.jms_page = await self.browser_context.new_page()
-        await self.jms_page.goto("https://jms.jtexpress.vn/")
+        try:
+            if "zalo.me" not in self.zalo_page.url:
+                await self.zalo_page.goto("https://chat.zalo.me/", wait_until="domcontentloaded", timeout=45000)
+        except Exception as ze:
+            print(f"[Browser Launch] Zalo tab navigation note: {ze}")
+
+        # Ensure JMS tab exists
+        self.jms_page = None
+        for p in self.browser_context.pages:
+            if "jms.jtexpress.vn" in p.url:
+                self.jms_page = p
+                break
+        if not self.jms_page:
+            try:
+                self.jms_page = await self.browser_context.new_page()
+                await self.jms_page.goto("https://jms.jtexpress.vn/", wait_until="domcontentloaded", timeout=45000)
+            except Exception as je:
+                print(f"[Browser Launch] JMS tab navigation note: {je}")
         
         # Setup file chooser listener on context to handle dynamically created pages/tabs
         self.browser_context.on("page", lambda p: self.setup_file_chooser_interceptor(p))
@@ -572,6 +601,9 @@ class JMSAutomation:
 
     def setup_file_chooser_interceptor(self, page):
         """Attaches a file chooser listener to the given page."""
+        if getattr(page, '_file_chooser_attached', False):
+            return
+        page._file_chooser_attached = True
         page.on("filechooser", lambda fc: asyncio.create_task(self.handle_file_chooser(fc, page)))
         print(f"[File Interceptor] Attached file chooser listener on page: {page.url}")
 
@@ -2896,7 +2928,7 @@ class JMSAutomation:
                     if menu_eval and menu_eval.get("success"):
                         print(f"Đang click tùy chọn tải về: '{menu_eval['text']}'...")
                         
-                        async with self.zalo_page.expect_download(timeout=15000) as download_info:
+                        async with self.zalo_page.expect_download(timeout=35000) as download_info:
                             await self.zalo_page.click('[data-temp-menu-download-click="true"]', timeout=5000)
                         download = await download_info.value
                         
@@ -2976,7 +3008,10 @@ class JMSAutomation:
             except Exception as e_bulk:
                 print(f"Phương pháp Bulk ZIP gặp lỗi tại bong bóng {bubble_idx+1}: {e_bulk}. Sẽ chuyển sang phương pháp Lightbox dự phòng...")
                 # Escape menu if open
-                await self.zalo_page.keyboard.press("Escape")
+                try:
+                    await self.zalo_page.keyboard.press("Escape")
+                except Exception:
+                    pass
                 await asyncio.sleep(0.5)
 
             # --- LAYER 2: Fallback to Lightbox loop download ---
@@ -3179,11 +3214,17 @@ class JMSAutomation:
                                 await asyncio.sleep(0.35)
                                 
                         # Close Lightbox
-                        await self.zalo_page.keyboard.press("Escape")
+                        try:
+                            await self.zalo_page.keyboard.press("Escape")
+                        except Exception:
+                            pass
                         await asyncio.sleep(0.25)
                 except Exception as e_lb:
                     print(f"Lỗi tải qua Lightbox ở bong bóng {bubble_idx+1}: {e_lb}")
-                    await self.zalo_page.keyboard.press("Escape")
+                    try:
+                        await self.zalo_page.keyboard.press("Escape")
+                    except Exception:
+                        pass
                     await asyncio.sleep(0.25)
                     
             # Accumulate results
@@ -3540,39 +3581,42 @@ class JMSAutomation:
         return True
 
     def cleanup_browser_locks(self):
-        """Clean up leftover Chrome lock files and ghost processes to prevent launch failures (Exit Code 21)."""
+        """Clean up leftover Chrome profile lock files, crash metrics, and ghost processes to prevent launch failures and download crashes."""
         import subprocess
         import stat
         import time
+        import shutil
 
-        print("[Browser Cleanup] Starting browser lock and process cleanup...")
+        print("[Browser Cleanup] Starting browser lock, crash metric, and process cleanup...")
         
-        # 1. Kill ghost chrome.exe processes belonging to jms_helper
+        # 1. Kill ghost chrome.exe processes belonging to this specific user_data profile
         try:
-            # Filter for chrome.exe with command line containing jms_helper
-            cmd = 'powershell -Command "Get-CimInstance Win32_Process -Filter \\"Name = \'chrome.exe\' AND CommandLine LIKE \'%jms_helper%\'\\" | Remove-CimInstance"'
+            profile_name = os.path.basename(USER_DATA_DIR)
+            cmd = f'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = \'chrome.exe\'\\" | Where-Object {{ $_.CommandLine -like \'*--user-data-dir=*{profile_name}*\' }} | Remove-CimInstance"'
             res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
             if res.returncode == 0:
-                print("[Browser Cleanup] Ghost Chrome processes terminated successfully.")
+                print("[Browser Cleanup] Ghost Chrome processes checked/cleaned.")
             else:
                 print(f"[Browser Cleanup] PowerShell warning: {res.stderr.strip()}")
         except Exception as e:
             print(f"[Browser Cleanup] Error running ghost process cleanup: {e}")
 
         # Wait a small moment to let handles release
-        time.sleep(0.5)
+        time.sleep(0.3)
 
-        # 2. Clean lock files in USER_DATA_DIR
+        # 2. Clean ONLY top-level profile lock files in USER_DATA_DIR and Default
+        # (NEVER delete LevelDB LOCK files in subdirectories, as that corrupts IndexedDB/LocalStorage databases)
         lock_files = [
             os.path.join(USER_DATA_DIR, "SingletonLock"),
             os.path.join(USER_DATA_DIR, "SingletonCookie"),
             os.path.join(USER_DATA_DIR, "Singleton Socket"),
-            os.path.join(USER_DATA_DIR, "lock"),
+            os.path.join(USER_DATA_DIR, "lockfile"),
+            os.path.join(USER_DATA_DIR, "parent.lock"),
             os.path.join(USER_DATA_DIR, "Default", "SingletonLock"),
             os.path.join(USER_DATA_DIR, "Default", "SingletonCookie"),
             os.path.join(USER_DATA_DIR, "Default", "Singleton Socket"),
-            os.path.join(USER_DATA_DIR, "Default", "lock"),
-            os.path.join(USER_DATA_DIR, "Default", "LOCK"),
+            os.path.join(USER_DATA_DIR, "Default", "lockfile"),
+            os.path.join(USER_DATA_DIR, "Default", "parent.lock"),
         ]
 
         for file_path in lock_files:
@@ -3580,26 +3624,67 @@ class JMSAutomation:
                 try:
                     os.chmod(file_path, stat.S_IWRITE)
                     os.remove(file_path)
-                    print(f"[Browser Cleanup] Removed lock file: {file_path}")
+                    print(f"[Browser Cleanup] Removed profile lock file: {file_path}")
                 except Exception as ex:
                     print(f"[Browser Cleanup] Could not remove lock file {file_path}: {ex}")
 
-        # Deep clean search for lock files starting with 'Singleton' or named 'lock' (case-insensitive)
+        # 3. Clean Crashpad and BrowserMetrics directories and PMA files to prevent crash reporting loops
+        for d in ["Crashpad", "BrowserMetrics"]:
+            dp = os.path.join(USER_DATA_DIR, d)
+            if os.path.exists(dp):
+                shutil.rmtree(dp, ignore_errors=True)
+                
         try:
             if os.path.exists(USER_DATA_DIR):
-                for root, dirs, files in os.walk(USER_DATA_DIR):
-                    for name in files:
-                        lower_name = name.lower()
-                        if lower_name.startswith("singleton") or lower_name == "lock":
-                            fp = os.path.join(root, name)
-                            try:
-                                os.chmod(fp, stat.S_IWRITE)
-                                os.remove(fp)
-                                print(f"[Browser Cleanup] Deep clean removed: {fp}")
-                            except Exception:
-                                pass
+                for f in os.listdir(USER_DATA_DIR):
+                    if f.endswith(".pma") or f.startswith("BrowserMetrics"):
+                        try:
+                            os.remove(os.path.join(USER_DATA_DIR, f))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        # 4. Clean Local State (preserve os_crypt for cookie decryption, remove corrupted metric/crash streak keys)
+        ls_path = os.path.join(USER_DATA_DIR, "Local State")
+        if os.path.exists(ls_path):
+            try:
+                with open(ls_path, "r", encoding="utf-8") as f:
+                    ls = json.load(f)
+                keys_to_remove = ["user_experience_metrics", "variations_crash_streak", "uninstall_metrics", "ukm", "breadcrumbs", "was"]
+                for k in keys_to_remove:
+                    ls.pop(k, None)
+                if "profile" in ls and isinstance(ls["profile"], dict):
+                    ls["profile"].pop("site_engagement", None)
+                    if "info_cache" in ls["profile"] and isinstance(ls["profile"]["info_cache"], dict):
+                        for prof_name, prof_info in ls["profile"]["info_cache"].items():
+                            if isinstance(prof_info, dict):
+                                prof_info.pop("site_engagement", None)
+                with open(ls_path, "w", encoding="utf-8") as f:
+                    json.dump(ls, f)
+            except Exception as e:
+                print(f"[Browser Cleanup] Local State cleanup note: {e}")
+
+        # 5. Sanitize Preferences to clean corrupted engagement timestamps and enforce download settings
+        pref_file = os.path.join(USER_DATA_DIR, "Default", "Preferences")
+        clean_prefs = {
+            "profile": {
+                "exit_type": "Normal",
+                "exited_cleanly": True
+            },
+            "download": {
+                "prompt_for_download": False,
+                "directory_upgrade": True,
+                "default_directory": DATA_DIR
+            }
+        }
+        try:
+            os.makedirs(os.path.dirname(pref_file), exist_ok=True)
+            with open(pref_file, "w", encoding="utf-8") as f:
+                json.dump(clean_prefs, f)
+            print("[Browser Cleanup] Profile preferences sanitized successfully.")
         except Exception as e:
-            print(f"[Browser Cleanup] Deep clean directory walk error: {e}")
+            print(f"[Browser Cleanup] Preferences sanitization error: {e}")
 
     async def close_browser(self):
         """Closes the Playwright browser context."""

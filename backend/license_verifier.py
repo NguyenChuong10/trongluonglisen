@@ -6,11 +6,18 @@ import hashlib
 import winreg
 import time
 import base64
+import subprocess
+import json
+import requests
 from datetime import datetime
 
 SECRET_SALT = "JMS_Helper_Secret_Key_2026_@!"
 REG_PATH = r"Software\JMS_Helper"
 REG_KEY = "TrialStart"
+TRIAL_DAYS = 30
+
+# URL Web App Google Apps Script (Cloud API Quản lý bản quyền của bạn)
+DEFAULT_CLOUD_URL = "https://script.google.com/macros/s/AKfycbxm2yJN1l5n3wtgNzgFRl8GEIp9aXl5Alb4_tJpLP2EAk4bntw7olalauKQmKyBBcQjpA/exec"
 
 # Setup pathing
 if hasattr(sys, '_MEIPASS'):
@@ -19,25 +26,94 @@ else:
     BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 DATA_DIR = os.path.join(BASE_DIR, "data")
+CONFIG_DIR = os.path.join(BASE_DIR, "config")
 LICENSE_FILE = os.path.join(DATA_DIR, "license.key")
 TRIAL_FILE = os.path.join(DATA_DIR, "trial.dat")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "license_config.json")
 
 # Setup Tkinter components dynamically
 import customtkinter as ctk
 import tkinter as tk
 
-def get_machine_id():
-    """Lấy mã định danh phần cứng duy nhất của máy tính chạy Windows."""
+def get_cloud_api_url():
+    """Lấy URL API đám mây từ file config nếu có, nếu không lấy mặc định."""
     try:
-        # Sử dụng MachineGuid của Windows registry (cực kỳ độc nhất và ổn định)
-        registry_key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
-        value, regtype = winreg.QueryValueEx(registry_key, "MachineGuid")
-        winreg.CloseKey(registry_key)
-        return str(value).strip().upper()
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                url = cfg.get("cloud_api_url", "").strip()
+                if url:
+                    return url
     except Exception:
-        # Fallback sang địa chỉ MAC nếu lỗi
+        pass
+    return DEFAULT_CLOUD_URL
+
+# ==========================================
+# CƠ CHẾ LẤY MÃ PHẦN CỨNG VĨNH VIỄN (HWID)
+# ==========================================
+
+def get_hardware_raw():
+    """
+    Lấy thông tin nhận dạng phần cứng vật lý không bao giờ thay đổi:
+    1. UUID Bo mạch chủ (Motherboard UUID)
+    2. Serial Number của BIOS
+    3. Serial Number của Ổ đĩa vật lý đầu tiên (Physical Disk Drive)
+    """
+    parts = []
+    
+    # 1. Truy vấn nhanh qua PowerShell CIM (Chuẩn Windows 10 & 11)
+    try:
+        cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "(Get-CimInstance Win32_ComputerSystemProduct).UUID; "
+            "(Get-CimInstance Win32_BIOS).SerialNumber; "
+            "(Get-CimInstance Win32_DiskDrive | Select-Object -First 1).SerialNumber"
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        if p.returncode == 0:
+            lines = [
+                l.strip() for l in p.stdout.splitlines() 
+                if l.strip() and l.strip().upper() not in ["NONE", "TO BE FILLED BY O.E.M.", "DEFAULT STRING"]
+            ]
+            if lines:
+                parts.extend(lines)
+    except Exception:
+        pass
+
+    # 2. Fallback sang WMIC nếu PowerShell gặp sự cố
+    if not parts:
+        try:
+            for wmic_cmd in [
+                "wmic csproduct get uuid", 
+                "wmic bios get serialnumber", 
+                "wmic diskdrive get serialnumber"
+            ]:
+                p = subprocess.run(wmic_cmd, capture_output=True, text=True, shell=True, timeout=3)
+                lines = [
+                    l.strip() for l in p.stdout.splitlines() 
+                    if l.strip() and "UUID" not in l and "SerialNumber" not in l
+                ]
+                if lines:
+                    parts.append(lines[0])
+        except Exception:
+            pass
+
+    # 3. Fallback cuối cùng sang MAC Address
+    if not parts:
         node = uuid.getnode()
-        return f"MAC-{node:012X}"
+        parts.append(f"MAC-{node:012X}")
+
+    return "|".join(parts)
+
+def get_machine_id():
+    """
+    Tạo Mã thiết bị cố định vĩnh viễn (HWID).
+    Định dạng: JMS-XXXX-XXXX-XXXX (Ví dụ: JMS-60A9-4FF9-DD10-C24B)
+    Không đổi kể cả khi format ổ C và cài lại Windows.
+    """
+    raw = get_hardware_raw()
+    h = hashlib.sha256(f"{SECRET_SALT}|{raw}".encode()).hexdigest()[:16].upper()
+    return f"JMS-{h[:4]}-{h[4:8]}-{h[8:12]}-{h[12:16]}"
 
 def generate_key_signature(machine_id, expiry_str):
     """Tạo signature bảo mật HMAC-SHA256 từ MachineID và Expiry Date."""
@@ -48,6 +124,7 @@ def verify_license_key(key):
     """
     Xác minh mã kích hoạt xem có hợp lệ và còn hạn hay không.
     Định dạng key: <MACHINE_ID>-<YYYYMMDD>-<SIGNATURE>
+    Ví dụ: JMS-60A9-4FF9-DD10-C24B-20261009-8295C199D679E3F2
     """
     if not key:
         return False, "Vui lòng nhập mã kích hoạt."
@@ -60,7 +137,7 @@ def verify_license_key(key):
     expiry_str = parts[-2]
     machine_id = "-".join(parts[:-2])
     
-    # 1. Kiểm tra Machine ID
+    # 1. Kiểm tra Machine ID phần cứng
     curr_machine_id = get_machine_id()
     if machine_id != curr_machine_id:
         return False, "Mã kích hoạt không dành cho máy tính này."
@@ -93,7 +170,6 @@ def check_time_tampering():
         if os.path.exists(file_path):
             try:
                 mtime = os.path.getmtime(file_path)
-                # Nếu thời gian hệ thống hiện tại nhỏ hơn thời gian chỉnh sửa file cuối cùng quá 1 giờ
                 if current_time < (mtime - 3600):
                     return True
             except Exception:
@@ -114,6 +190,41 @@ def check_license_saved():
         return is_valid
     except Exception:
         return False
+
+# ==========================================
+# CƠ CHẾ ĐỒNG BỘ ONLINE (CLOUD TRIAL SYNC)
+# ==========================================
+
+def query_cloud_trial(machine_id):
+    """
+    Gửi truy vấn ngầm lên Cloud/Google Sheets để lấy ngày đăng ký gốc.
+    Trả về (success, response_dict)
+    """
+    url = get_cloud_api_url()
+    if not url or "SAMPLE_DEPLOYMENT_ID" in url:
+        # Chưa cấu hình URL Cloud tùy chỉnh, bỏ qua truy vấn online
+        return False, None
+
+    try:
+        params = {
+            "hwid": machine_id,
+            "app": "JMS_Helper",
+            "action": "check"
+        }
+        resp = requests.get(
+            url, 
+            params=params, 
+            timeout=4, 
+            headers={"User-Agent": "JMS-Helper-Client/1.0"}
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("status") == "success":
+                return True, data
+    except Exception as e:
+        # Có thể do mất mạng tạm thời, sẽ fallback sang kiểm tra offline
+        pass
+    return False, None
 
 # ==========================================
 # CÁC HÀM XỬ LÝ HẠN DÙNG THỬ (AUTO-TRIAL)
@@ -164,21 +275,52 @@ def set_file_trial_date(date_val):
 
 def check_trial_status():
     """
-    Kiểm tra trạng thái dùng thử 45 ngày.
-    Trả về (is_in_trial, remaining_days, message)
+    Kiểm tra trạng thái dùng thử 30 ngày kết hợp Online Cloud Sync + Offline Cache:
+    1. Kiểm tra chống lùi giờ hệ thống.
+    2. Đồng bộ ngày bắt đầu gốc từ Cloud (Nếu cài lại Win, Cloud vẫn giữ ngày gốc).
+    3. Trả về (is_in_trial, remaining_days, message).
     """
     if check_time_tampering():
         return False, 0, "Phát hiện thời gian hệ thống không chính xác (nghi vấn lùi giờ)."
 
+    machine_id = get_machine_id()
+    today = datetime.now().date()
+    
+    # 1. Thử đồng bộ từ Cloud trước
+    cloud_ok, cloud_data = query_cloud_trial(machine_id)
+    if cloud_ok and cloud_data:
+        # Kiểm tra nếu máy bị Admin Block từ xa trên Google Sheet
+        if cloud_data.get("is_blocked"):
+            return False, 0, "Thiết bị này đã bị Admin tạm khóa quyền truy cập trên hệ thống."
+            
+        first_seen_str = str(cloud_data.get("first_seen", "")).strip()
+        try:
+            cloud_first_date = datetime.strptime(first_seen_str, "%Y%m%d").date()
+            # Ghi đè cập nhật vào Registry và File cục bộ để đồng bộ
+            set_registry_trial_date(cloud_first_date)
+            set_file_trial_date(cloud_first_date)
+            
+            elapsed = (today - cloud_first_date).days
+            if elapsed < 0:
+                return False, 0, "Thời gian hệ thống không khớp với mốc đăng ký máy chủ."
+                
+            remaining = TRIAL_DAYS - elapsed
+            if remaining >= 0:
+                return True, remaining, f"Hạn dùng thử còn lại: {remaining} ngày."
+            else:
+                return False, 0, f"Đã hết thời hạn dùng thử {TRIAL_DAYS} ngày (theo dữ liệu máy chủ)."
+        except Exception:
+            pass
+
+    # 2. Nếu không có kết nối Cloud (hoặc chưa cấu hình Cloud URL), dùng cơ chế lưu vết cục bộ
     reg_date = get_registry_trial_date()
     file_date = get_file_trial_date()
 
     if not reg_date and not file_date:
-        # Lần đầu tiên chạy app: Tạo ngày bắt đầu dùng thử là hôm nay
-        today = datetime.now().date()
+        # Lần đầu tiên chạy app: Lưu ngày hôm nay làm mốc bắt đầu
         set_registry_trial_date(today)
         set_file_trial_date(today)
-        return True, 45, "Bắt đầu dùng thử 45 ngày."
+        return True, TRIAL_DAYS, f"Bắt đầu dùng thử {TRIAL_DAYS} ngày."
 
     # Đồng bộ hóa ngày nếu một trong hai bên bị xóa/tamper
     if reg_date and not file_date:
@@ -193,17 +335,16 @@ def check_trial_status():
         set_registry_trial_date(start_date)
         set_file_trial_date(start_date)
 
-    today = datetime.now().date()
     elapsed = (today - start_date).days
 
     if elapsed < 0:
         return False, 0, "Thời gian hệ thống không khớp với ngày bắt đầu dùng thử."
 
-    remaining = 45 - elapsed
+    remaining = TRIAL_DAYS - elapsed
     if remaining >= 0:
         return True, remaining, f"Hạn dùng thử còn lại: {remaining} ngày."
     else:
-        return False, 0, "Đã hết thời hạn dùng thử 45 ngày."
+        return False, 0, f"Đã hết thời hạn dùng thử {TRIAL_DAYS} ngày."
 
 # ==========================================
 # GIAO DIỆN KÍCH HOẠT (CUSTOMTKINTER)
@@ -216,7 +357,7 @@ class ActivationDialog(ctk.CTk):
         self.activated = False
         
         self.title("Kích hoạt bản quyền - JMS Helper")
-        self.geometry("520x360")
+        self.geometry("540x370")
         self.resizable(False, False)
         self.attributes("-topmost", True)
         
@@ -240,7 +381,7 @@ class ActivationDialog(ctk.CTk):
         
         sub_label = ctk.CTkLabel(
             main_frame,
-            text="Phần mềm chưa được kích hoạt hoặc đã hết 45 ngày dùng thử.",
+            text=f"Phần mềm chưa được kích hoạt hoặc đã hết {TRIAL_DAYS} ngày dùng thử.",
             font=("Segoe UI", 11),
             text_color="#94a3b8"
         )
@@ -253,11 +394,11 @@ class ActivationDialog(ctk.CTk):
         
         self.id_entry = ctk.CTkEntry(
             mid_frame, 
-            width=320, 
+            width=340, 
             fg_color="transparent", 
             border_width=0, 
-            font=("Consolas", 11), 
-            text_color="#f8fafc"
+            font=("Consolas", 12, "bold"), 
+            text_color="#38bdf8"
         )
         self.id_entry.insert(0, machine_id)
         self.id_entry.configure(state="readonly")
@@ -363,7 +504,7 @@ class ActivationDialog(ctk.CTk):
 def prompt_activation_cli():
     """Hộp thoại kích hoạt cho môi trường CLI (không hỗ trợ GUI)."""
     print("\n" + "="*60)
-    print("ỨNG DỤNG CHƯA ĐƯỢC KÍCH HOẠT HOẶC ĐÃ HẾT HẠN DÙNG THỬ 45 NGÀY")
+    print(f"ỨNG DỤNG CHƯA ĐƯỢC KÍCH HOẠT HOẶC ĐÃ HẾT HẠN DÙNG THỬ {TRIAL_DAYS} NGÀY")
     print("="*60)
     print(f"Mã thiết bị của bạn: {get_machine_id()}")
     print("Vui lòng gửi mã trên cho Admin để nhận khóa kích hoạt.")
@@ -417,7 +558,7 @@ def verify_and_enforce_license(on_success):
         on_success()
         return
 
-    # 3. Nếu chưa kích hoạt Key, kiểm tra xem còn trong hạn dùng thử 45 ngày hay không
+    # 3. Nếu chưa kích hoạt Key, kiểm tra xem còn trong hạn dùng thử 30 ngày hay không
     is_in_trial, remaining_days, trial_msg = check_trial_status()
     if is_in_trial:
         on_success()

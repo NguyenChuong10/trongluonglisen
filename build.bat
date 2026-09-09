@@ -12,7 +12,7 @@ if %errorlevel% neq 0 (
 )
 
 echo [Info] Bat dau build file EXE bang PyInstaller...
-python -m PyInstaller --clean --console --onefile --paths backend --add-data "frontend;frontend" --name "JMS_Helper" main.py
+python -m PyInstaller --clean --console --onefile --paths backend --add-data "frontend;frontend" --collect-all customtkinter --name "JMS_Helper" main.py
 
 if %errorlevel% equ 0 (
     echo [Info] Dang di chuyen file EXE ra thu muc goc...

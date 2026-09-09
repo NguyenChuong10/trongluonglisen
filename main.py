@@ -67,18 +67,19 @@ if __name__ == "__main__":
             
             # Clean shutdown on closing Tkinter window
             def on_closing():
-                print("Closing application...")
-                # Clean up browser context before exiting
-                if server.automation:
-                    if server.main_loop:
+                from tkinter import messagebox
+                if messagebox.askyesno("Thoát ứng dụng", "Bạn có chắc chắn muốn tắt ứng dụng JMS Helper (bao gồm cả trình duyệt Chrome điều khiển) không?"):
+                    print("Closing application...")
+                    # Clean up browser context before exiting
+                    if server.automation and server.main_loop:
                         try:
                             future = asyncio.run_coroutine_threadsafe(server.automation.close_browser(), server.main_loop)
                             # wait up to 2 seconds for clean stop
                             future.result(timeout=2.0)
                         except Exception:
                             pass
-                root.destroy()
-                sys.exit(0)
+                    root.destroy()
+                    sys.exit(0)
                 
             root.protocol("WM_DELETE_WINDOW", on_closing)
             root.mainloop()
